@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - claude/lucid-cannon-JrAgK
     paths:
       - 'prototype/**'
       - '.github/workflows/deploy.yml'
