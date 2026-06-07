@@ -4,7 +4,7 @@ const dcsStatus = (dcs: number) => {
   if (dcs >= 80) return 'Боги ещё слышат молитвы'
   if (dcs >= 50) return 'Храмы спорят, боги молчат'
   if (dcs >= 25) return 'Люди больше не верят дворцам'
-  if (dcs >= 1)  return 'Все требуют еду, железо, людей'
+  if (dcs >= 1)  return 'Все требуют еду, медь, людей'
   return 'Старый мир умер'
 }
 
@@ -59,12 +59,14 @@ export function ShipHub() {
               <span className="resource-value">{resources.bronze}</span>
             </div>
             <div className="resource-row">
-              <span className="resource-name">⚔️ Железо</span>
-              <span className="resource-value">{resources.iron}</span>
+              <span className="resource-name">🔥 Смола</span>
+              <span className={`resource-value${resources.pitch < 2 ? ' critical' : ''}`}>
+                {resources.pitch}
+              </span>
             </div>
             <div className="resource-row">
-              <span className="resource-name">🔮 Метис</span>
-              <span className="resource-value">{odysseus.metis}/5</span>
+              <span className="resource-name">⚰️ Олово</span>
+              <span className="resource-value">{resources.tin}</span>
             </div>
           </div>
         </div>
@@ -75,6 +77,7 @@ export function ShipHub() {
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {[
             { label: 'Ностос', value: odysseus.nostos },
+            { label: 'Метис', value: `${odysseus.metis}/5` },
             { label: 'Слава', value: odysseus.glory },
             { label: 'Гнев', value: odysseus.anger },
             { label: 'Благочестие', value: odysseus.piety },

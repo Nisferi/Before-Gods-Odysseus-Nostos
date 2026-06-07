@@ -56,10 +56,10 @@ export function HUD() {
           <span className="res-icon">🪙</span>
           <span className="res-count">{resources.gold}</span>
         </div>
-        {resources.iron > 0 && (
+        {resources.pitch > 0 && (
           <div className="res-item">
-            <span className="res-icon">⚔️</span>
-            <span className="res-count">{resources.iron}</span>
+            <span className="res-icon">🔥</span>
+            <span className="res-count">{resources.pitch}</span>
           </div>
         )}
         {resources.bronze > 0 && (

@@ -15,8 +15,8 @@ export interface Resources {
   food: number
   gold: number
   bronze: number
-  silver: number
-  iron: number
+  pitch: number
+  tin: number
 }
 
 export interface OdysseusStats {
@@ -42,8 +42,8 @@ export interface GameEffect {
   food?: number
   gold?: number
   bronze?: number
-  silver?: number
-  iron?: number
+  pitch?: number
+  tin?: number
   hp?: number
   metis?: number
   anger?: number

@@ -80,8 +80,8 @@ const applyEffectsToState = (
   if (fx.food !== undefined) newResources.food = Math.max(0, newResources.food + fx.food)
   if (fx.gold !== undefined) newResources.gold = Math.max(0, newResources.gold + fx.gold)
   if (fx.bronze !== undefined) newResources.bronze = Math.max(0, newResources.bronze + fx.bronze)
-  if (fx.silver !== undefined) newResources.silver = Math.max(0, newResources.silver + fx.silver)
-  if (fx.iron !== undefined) newResources.iron = Math.max(0, newResources.iron + fx.iron)
+  if (fx.pitch !== undefined) newResources.pitch = Math.max(0, newResources.pitch + fx.pitch)
+  if (fx.tin !== undefined) newResources.tin = Math.max(0, newResources.tin + fx.tin)
 
   const newOdysseus = { ...state.odysseus }
   if (fx.hp !== undefined) newOdysseus.hp = Math.max(0, Math.min(newOdysseus.maxHp, newOdysseus.hp + fx.hp))
@@ -101,7 +101,10 @@ const applyEffectsToState = (
   if (fx.food && fx.food < 0) effectSummary.push(`${fx.food} провизии`)
   if (fx.gold && fx.gold > 0) effectSummary.push(`+${fx.gold} золота`)
   if (fx.gold && fx.gold < 0) effectSummary.push(`${fx.gold} золота`)
-  if (fx.iron && fx.iron > 0) effectSummary.push(`+${fx.iron} железа`)
+  if (fx.pitch && fx.pitch > 0) effectSummary.push(`+${fx.pitch} смолы`)
+  if (fx.pitch && fx.pitch < 0) effectSummary.push(`${fx.pitch} смолы`)
+  if (fx.tin && fx.tin > 0) effectSummary.push(`+${fx.tin} олова`)
+  if (fx.tin && fx.tin < 0) effectSummary.push(`${fx.tin} олова`)
   if (fx.hp && fx.hp < 0) effectSummary.push(`${fx.hp} здоровья`)
   if (fx.hp && fx.hp > 0) effectSummary.push(`+${fx.hp} здоровья`)
   if (fx.metis && fx.metis > 0) effectSummary.push(`+${fx.metis} Метис`)
@@ -142,7 +145,7 @@ const initialOdysseus: OdysseusStats = {
 }
 
 const initialResources: Resources = {
-  food: 0, gold: 0, bronze: 5, silver: 0, iron: 0,
+  food: 0, gold: 0, bronze: 5, pitch: 2, tin: 0,
 }
 
 export const useGameStore = create<GameState>((set, get) => ({
