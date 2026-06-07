@@ -33,10 +33,14 @@ interface GameState {
   choiceResult: ChoiceResult | null
   log: LogEntry[]
 
+  fromExploration: boolean
+
   startGame: () => void
   goToLocation: () => void
   goToShip: () => void
+  startExploration: () => void
   triggerNextEvent: () => void
+  triggerEventById: (eventId: string) => void
   makeChoice: (choice: Choice) => void
   continueAfterChoice: () => void
   startFinalBoss: () => void
@@ -158,6 +162,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   bossPhase: 0,
   bossDefeated: false,
   flags: {},
+  fromExploration: false,
   activeEvent: null,
   activeBoss: null,
   activeBossPhase: null,
@@ -182,6 +187,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       bossPhase: 0,
       bossDefeated: false,
       flags: {},
+      fromExploration: false,
       activeEvent: fixedEvent,
       activeBoss: null,
       activeBossPhase: null,
@@ -206,6 +212,14 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   goToShip: () => set({ phase: 'ship', activeEvent: null, choiceResult: null }),
+
+  startExploration: () => set({ phase: 'exploration', fromExploration: false }),
+
+  triggerEventById: (eventId: string) => {
+    const event = act1Events.find(e => e.id === eventId) ?? null
+    if (!event) return
+    set({ phase: 'event', activeEvent: event, choiceResult: null, fromExploration: true })
+  },
 
   triggerNextEvent: () => {
     const state = get()
@@ -239,6 +253,10 @@ export const useGameStore = create<GameState>((set, get) => ({
   continueAfterChoice: () => {
     const state = get()
     set({ choiceResult: null, activeEvent: null })
+    if (state.fromExploration) {
+      set({ phase: 'exploration', fromExploration: false })
+      return
+    }
     const pool = buildAvailableEvents(state.completedEvents, state.flags)
     if (pool.length === 0 && !state.bossDefeated) {
       set({ phase: 'boss', activeBoss: shadowOfHector, activeBossPhase: shadowOfHector.phases[0], bossPhase: 0 })
@@ -337,6 +355,7 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   resetGame: () => set({
     phase: 'menu',
+    fromExploration: false,
     odysseus: { ...initialOdysseus },
     resources: { ...initialResources },
     crew: initialCrew.map(m => ({ ...m })),

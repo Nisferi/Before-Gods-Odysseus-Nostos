@@ -2,6 +2,7 @@ export type GamePhase =
   | 'menu'
   | 'ship'
   | 'location'
+  | 'exploration'
   | 'event'
   | 'event_result'
   | 'boss'
