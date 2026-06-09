@@ -42,6 +42,9 @@ interface GameState {
   startExploration: () => void
   triggerNextEvent: () => void
   triggerEventById: (eventId: string) => void
+  addPickup: (kind: 'food' | 'gold' | 'pitch') => void
+  damagePlayer: (amount: number) => void
+  endDuel: (won: boolean) => void
   makeChoice: (choice: Choice) => void
   continueAfterChoice: () => void
   startFinalBoss: () => void
@@ -210,11 +213,39 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (state.bossDefeated) {
         set({ phase: 'finale' })
       } else {
-        set({ phase: 'boss', activeBoss: shadowOfHector, activeBossPhase: shadowOfHector.phases[0], bossPhase: 0 })
+        set({ phase: 'duel', log: [...state.log, { text: 'Из пепла поднимается тень в горящем доспехе…', type: 'combat' }] })
       }
       return
     }
     set({ phase: 'event', activeEvent: next, choiceResult: null })
+  },
+
+  addPickup: (kind) => {
+    const state = get()
+    set({ resources: { ...state.resources, [kind]: state.resources[kind] + 1 } })
+  },
+
+  damagePlayer: (amount) => {
+    const state = get()
+    const hp = Math.max(0, state.odysseus.hp - amount)
+    set({ odysseus: { ...state.odysseus, hp } })
+    if (hp <= 0) set({ phase: 'death', log: [...state.log, { text: 'Одиссей пал на берегу Трои.', type: 'combat' }] })
+  },
+
+  endDuel: (won) => {
+    const state = get()
+    if (won) {
+      set({
+        phase: 'boss',
+        activeBoss: shadowOfHector,
+        activeBossPhase: shadowOfHector.phases[1],
+        bossPhase: 1,
+        choiceResult: null,
+        log: [...state.log, { text: 'Тень Гектора повержена в бою. Она ждёт твоего слова.', type: 'combat' }],
+      })
+    } else {
+      set({ phase: 'death', log: [...state.log, { text: 'Тень Гектора оказалась сильнее.', type: 'combat' }] })
+    }
   },
 
   goToShip: () => set({ phase: 'ship', activeEvent: null, choiceResult: null }),
@@ -238,7 +269,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       if (state.bossDefeated) {
         set({ phase: 'finale' })
       } else {
-        set({ phase: 'boss', activeBoss: shadowOfHector, activeBossPhase: shadowOfHector.phases[0], bossPhase: 0 })
+        set({ phase: 'duel' })
       }
       return
     }
@@ -277,7 +308,7 @@ export const useGameStore = create<GameState>((set, get) => ({
     }
     const pool = buildAvailableEvents(state.completedEvents, state.flags)
     if (pool.length === 0 && !state.bossDefeated) {
-      set({ phase: 'boss', activeBoss: shadowOfHector, activeBossPhase: shadowOfHector.phases[0], bossPhase: 0 })
+      set({ phase: 'duel' })
     } else {
       set({ phase: 'location' })
     }

@@ -16,17 +16,24 @@ export default function App() {
   const phase = useGameStore(s => s.phase)
   const goToShip = useGameStore(s => s.goToShip)
   const triggerEventById = useGameStore(s => s.triggerEventById)
+  const endDuel = useGameStore(s => s.endDuel)
 
   const handleExploreExit = useCallback(() => goToShip(), [goToShip])
   const handleTriggerEvent = useCallback((id: string) => triggerEventById(id), [triggerEventById])
+  const handleDuelEnd = useCallback((won: boolean) => endDuel(won), [endDuel])
 
   if (phase === 'menu') return <MainMenu />
 
-  if (phase === 'exploration') {
+  if (phase === 'exploration' || phase === 'duel') {
     return (
       <div className="game-wrapper" style={{ padding: 0 }}>
         <HUD />
-        <GameCanvas onExit={handleExploreExit} onTriggerEvent={handleTriggerEvent} />
+        <GameCanvas
+          mode={phase === 'duel' ? 'duel' : 'explore'}
+          onExit={handleExploreExit}
+          onTriggerEvent={handleTriggerEvent}
+          onDuelEnd={handleDuelEnd}
+        />
       </div>
     )
   }

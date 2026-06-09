@@ -5,6 +5,7 @@ export type GamePhase =
   | 'exploration'
   | 'event'
   | 'event_result'
+  | 'duel'
   | 'boss'
   | 'boss_result'
   | 'finale'
