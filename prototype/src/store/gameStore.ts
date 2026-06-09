@@ -10,6 +10,7 @@ import { initialCrew } from '../data/crew'
 interface GameState {
   phase: GamePhase
   runNumber: number
+  daysElapsed: number
 
   odysseus: OdysseusStats
   resources: Resources
@@ -136,7 +137,7 @@ const applyEffectsToState = (
 
 const initialOdysseus: OdysseusStats = {
   hp: 100, maxHp: 100,
-  metis: 3,
+  metis: 2,
   anger: 0,
   piety: 10,
   nostos: 60,
@@ -151,10 +152,11 @@ const initialResources: Resources = {
 export const useGameStore = create<GameState>((set, get) => ({
   phase: 'menu',
   runNumber: 0,
+  daysElapsed: 0,
   odysseus: initialOdysseus,
   resources: initialResources,
   crew: initialCrew,
-  crewTrust: 20,
+  crewTrust: 35,
   athenaFavor: 10,
   poseidonWrath: 30,
   dcs: 85,
@@ -178,10 +180,11 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({
       phase: fixedEvent ? 'event' : 'location',
       runNumber: state.runNumber + 1,
+      daysElapsed: 0,
       odysseus: { ...initialOdysseus },
       resources: { ...initialResources },
       crew: initialCrew.map(m => ({ ...m })),
-      crewTrust: 20,
+      crewTrust: 35,
       athenaFavor: 10,
       poseidonWrath: 30,
       dcs: 85,
@@ -216,7 +219,10 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   goToShip: () => set({ phase: 'ship', activeEvent: null, choiceResult: null }),
 
-  startExploration: () => set({ phase: 'exploration', fromExploration: false }),
+  startExploration: () => {
+    const state = get()
+    set({ phase: 'exploration', fromExploration: false, daysElapsed: state.daysElapsed + 1 })
+  },
 
   triggerEventById: (eventId: string) => {
     const event = act1Events.find(e => e.id === eventId) ?? null
@@ -255,7 +261,16 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   continueAfterChoice: () => {
     const state = get()
-    set({ choiceResult: null, activeEvent: null })
+    const foodCost = Math.max(1, Math.ceil(state.crew.filter(m => m.alive).length / 2))
+    const newFood = Math.max(0, state.resources.food - foodCost)
+    const foodLow = newFood < 3
+    set({
+      choiceResult: null,
+      activeEvent: null,
+      resources: { ...state.resources, food: newFood },
+      crewTrust: foodLow ? Math.max(0, state.crewTrust - 10) : state.crewTrust,
+      daysElapsed: state.daysElapsed + 1,
+    })
     if (state.fromExploration) {
       set({ phase: 'exploration', fromExploration: false })
       return
@@ -359,10 +374,11 @@ export const useGameStore = create<GameState>((set, get) => ({
   resetGame: () => set({
     phase: 'menu',
     fromExploration: false,
+    daysElapsed: 0,
     odysseus: { ...initialOdysseus },
     resources: { ...initialResources },
     crew: initialCrew.map(m => ({ ...m })),
-    crewTrust: 20,
+    crewTrust: 35,
     athenaFavor: 10,
     poseidonWrath: 30,
     dcs: 85,
