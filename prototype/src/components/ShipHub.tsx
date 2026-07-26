@@ -4,12 +4,48 @@ const dcsStatus = (dcs: number) => {
   if (dcs >= 80) return 'Боги ещё слышат молитвы'
   if (dcs >= 50) return 'Храмы спорят, боги молчат'
   if (dcs >= 25) return 'Люди больше не верят дворцам'
-  if (dcs >= 1)  return 'Все требуют еду, железо, людей'
+  if (dcs >= 1)  return 'Все требуют еду, медь, людей'
   return 'Старый мир умер'
 }
 
+interface CrewAction {
+  label: string
+  detail: string
+  /** null when available, otherwise why it is not */
+  blocked: (s: ReturnType<typeof useGameStore.getState>, trust: number) => string | null
+}
+
+const CREW_ACTIONS: Record<string, CrewAction> = {
+  eurylochus: {
+    label: 'Спросить о готовности',
+    detail: 'Честная оценка: чего не хватает для отплытия',
+    blocked: () => null,
+  },
+  polites: {
+    label: 'Разведать берег',
+    detail: '+1 провизия, +2 доверие',
+    blocked: (_s, trust) => (trust < 40 ? 'Нужно его доверие 40' : null),
+  },
+  kyros: {
+    label: 'Просмолить корпус',
+    detail: '−1 смола · корабль станет мореходным',
+    blocked: s => (s.flags.hull_sealed ? 'Корпус уже просмолён' : s.resources.pitch < 1 ? 'Нужна смола' : null),
+  },
+  aed: {
+    label: 'Спеть о доме',
+    detail: '+8 доверие команды, +3 Ностос',
+    blocked: (_s, trust) => (trust < 35 ? 'Нужно его доверие 35' : null),
+  },
+  smith: {
+    label: 'Переплавить олово',
+    detail: '−1 олово → +2 бронзы',
+    blocked: s => (s.resources.tin < 1 ? 'Нужно олово' : null),
+  },
+}
+
 export function ShipHub() {
-  const { crew, crewTrust, resources, dcs, odysseus, log, goToLocation, bossDefeated } = useGameStore()
+  const { crew, crewTrust, resources, dcs, odysseus, log, goToLocation, bossDefeated,
+          daysElapsed, crewActionDay, flags, useCrewAction } = useGameStore()
 
   return (
     <div className="ship-screen">
@@ -25,19 +61,42 @@ export function ShipHub() {
 
       <div className="ship-grid">
         <div className="ship-section">
-          <h3>Команда · Доверие {crewTrust}%</h3>
+          <h3>Команда · Доверие {crewTrust}% · День {daysElapsed}</h3>
+          <p style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 10 }}>
+            Каждый может сделать одно дело за день. День проходит при выходе на берег.
+          </p>
           <div className="crew-list">
-            {crew.filter(m => m.alive).map(member => (
-              <div key={member.id} className="crew-member">
-                <div>
-                  <div className="crew-name">{member.name}</div>
-                  <div className="crew-role">{member.role}</div>
+            {crew.filter(m => m.alive).map(member => {
+              const action = CREW_ACTIONS[member.id]
+              const usedToday = crewActionDay[member.id] === daysElapsed
+              const reason = action?.blocked(useGameStore.getState(), member.trust) ?? null
+              const disabled = usedToday || !!reason
+              return (
+                <div key={member.id} className="crew-member" style={{ flexWrap: 'wrap', gap: 8 }}>
+                  <div style={{ minWidth: 150 }}>
+                    <div className="crew-name">{member.name}</div>
+                    <div className="crew-role">{member.role}</div>
+                  </div>
+                  <div className="crew-trust-bar">
+                    <div className="crew-trust-fill" style={{ width: `${member.trust}%` }} />
+                  </div>
+                  {action && (
+                    <button
+                      className="btn btn-ghost"
+                      disabled={disabled}
+                      onClick={() => useCrewAction(member.id)}
+                      style={{ fontSize: 12, padding: '6px 12px', flexBasis: '100%' }}
+                      title={usedToday ? 'Уже занят сегодня' : reason ?? action.detail}
+                    >
+                      {action.label}
+                      <span style={{ display: 'block', fontSize: 11, color: 'var(--text-dim)' }}>
+                        {usedToday ? 'Уже занят сегодня' : reason ?? action.detail}
+                      </span>
+                    </button>
+                  )}
                 </div>
-                <div className="crew-trust-bar">
-                  <div className="crew-trust-fill" style={{ width: `${member.trust}%` }} />
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
 
@@ -59,12 +118,20 @@ export function ShipHub() {
               <span className="resource-value">{resources.bronze}</span>
             </div>
             <div className="resource-row">
-              <span className="resource-name">⚔️ Железо</span>
-              <span className="resource-value">{resources.iron}</span>
+              <span className="resource-name">🔥 Смола</span>
+              <span className={`resource-value${!flags.hull_sealed && resources.pitch < 1 ? ' critical' : ''}`}>
+                {resources.pitch}
+              </span>
             </div>
             <div className="resource-row">
-              <span className="resource-name">🔮 Метис</span>
-              <span className="resource-value">{odysseus.metis}/5</span>
+              <span className="resource-name">⚓ Корпус</span>
+              <span className={`resource-value${flags.hull_sealed ? '' : ' critical'}`}>
+                {flags.hull_sealed ? 'просмолён' : 'течёт ⚠'}
+              </span>
+            </div>
+            <div className="resource-row">
+              <span className="resource-name">⚰️ Олово</span>
+              <span className="resource-value">{resources.tin}</span>
             </div>
           </div>
         </div>
@@ -75,6 +142,7 @@ export function ShipHub() {
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {[
             { label: 'Ностос', value: odysseus.nostos },
+            { label: 'Метис', value: `${odysseus.metis}/5` },
             { label: 'Слава', value: odysseus.glory },
             { label: 'Гнев', value: odysseus.anger },
             { label: 'Благочестие', value: odysseus.piety },

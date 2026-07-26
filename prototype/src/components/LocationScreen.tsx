@@ -1,7 +1,7 @@
 import { useGameStore } from '../store/gameStore'
 
 export function LocationScreen() {
-  const { completedEvents, goToLocation, goToShip } = useGameStore()
+  const { completedEvents, startExploration, goToLocation, goToShip } = useGameStore()
   const eventsCount = completedEvents.length
   const canFight = eventsCount >= 3
 
@@ -19,8 +19,11 @@ export function LocationScreen() {
       </p>
 
       <div className="location-actions">
-        <button className="btn btn-primary" onClick={goToLocation}>
+        <button className="btn btn-primary" onClick={startExploration}>
           Исследовать берег
+        </button>
+        <button className="btn btn-secondary" onClick={goToLocation}>
+          Случайное событие
         </button>
         <button className="btn btn-ghost" onClick={goToShip}>
           Вернуться на корабль

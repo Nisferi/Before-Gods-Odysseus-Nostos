@@ -2,8 +2,11 @@ export type GamePhase =
   | 'menu'
   | 'ship'
   | 'location'
+  | 'exploration'
   | 'event'
   | 'event_result'
+  | 'duel'
+  | 'duel2'
   | 'boss'
   | 'boss_result'
   | 'finale'
@@ -14,8 +17,8 @@ export interface Resources {
   food: number
   gold: number
   bronze: number
-  silver: number
-  iron: number
+  pitch: number
+  tin: number
 }
 
 export interface OdysseusStats {
@@ -41,8 +44,8 @@ export interface GameEffect {
   food?: number
   gold?: number
   bronze?: number
-  silver?: number
-  iron?: number
+  pitch?: number
+  tin?: number
   hp?: number
   metis?: number
   anger?: number

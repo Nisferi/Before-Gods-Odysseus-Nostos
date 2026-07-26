@@ -1,13 +1,13 @@
 import { useGameStore } from '../store/gameStore'
 
 export function HUD() {
-  const { odysseus, resources, crewTrust, athenaFavor, dcs, phase } = useGameStore()
+  const { odysseus, resources, crewTrust, athenaFavor, dcs, phase, daysElapsed } = useGameStore()
   if (phase === 'menu') return null
 
   return (
     <div className="hud">
       <div className="hud-stat">
-        <span className="hud-label">Здоровье</span>
+        <span className="hud-label">День {daysElapsed}</span>
         <span className="hud-value">{odysseus.hp}/{odysseus.maxHp}</span>
         <div className="bar-wrap">
           <div className="bar-fill bar-hp" style={{ width: `${(odysseus.hp / odysseus.maxHp) * 100}%` }} />
@@ -56,10 +56,10 @@ export function HUD() {
           <span className="res-icon">🪙</span>
           <span className="res-count">{resources.gold}</span>
         </div>
-        {resources.iron > 0 && (
+        {resources.pitch > 0 && (
           <div className="res-item">
-            <span className="res-icon">⚔️</span>
-            <span className="res-count">{resources.iron}</span>
+            <span className="res-icon">🔥</span>
+            <span className="res-count">{resources.pitch}</span>
           </div>
         )}
         {resources.bronze > 0 && (
