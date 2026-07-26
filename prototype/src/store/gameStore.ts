@@ -36,7 +36,9 @@ interface GameState {
   log: LogEntry[]
 
   fromExploration: boolean
+  crewActionDay: Record<string, number>
 
+  useCrewAction: (memberId: string) => void
   startGame: () => void
   goToLocation: () => void
   goToShip: () => void
@@ -173,6 +175,7 @@ export const useGameStore = create<GameState>((set, get) => ({
   bossDefeated: false,
   flags: {},
   fromExploration: false,
+  crewActionDay: {},
   activeEvent: null,
   activeBoss: null,
   activeBossPhase: null,
@@ -212,6 +215,7 @@ export const useGameStore = create<GameState>((set, get) => ({
       bossDefeated: false,
       flags: carriedFlags,
       fromExploration: false,
+      crewActionDay: {},
       activeEvent: fixedEvent,
       activeBoss: null,
       activeBossPhase: null,
@@ -302,6 +306,91 @@ export const useGameStore = create<GameState>((set, get) => ({
   },
 
   goToShip: () => set({ phase: 'ship', activeEvent: null, choiceResult: null }),
+
+  /**
+   * Each crew member can do one thing per day. This is what turns the crew from
+   * a trust bar into five people: their skills are the only way to seal the hull,
+   * turn tin into bronze, or claw trust back before the departure.
+   */
+  useCrewAction: (memberId) => {
+    const state = get()
+    const member = state.crew.find(m => m.id === memberId)
+    if (!member?.alive) return
+    if (state.crewActionDay[memberId] === state.daysElapsed) return
+
+    const res = { ...state.resources }
+    const flags = { ...state.flags }
+    let trust = state.crewTrust
+    let nostos = state.odysseus.nostos
+    let memberTrust = member.trust
+    let text = ''
+
+    switch (memberId) {
+      case 'aed': {
+        if (member.trust < 35) return
+        trust = Math.min(100, trust + 8)
+        nostos = Math.min(100, nostos + 3)
+        memberTrust = Math.min(100, memberTrust + 2)
+        text = 'Фемий поёт об Итаке. Впервые за долгое время команда слушает молча.'
+        break
+      }
+      case 'polites': {
+        if (member.trust < 40) return
+        res.food += 1
+        trust = Math.min(100, trust + 2)
+        memberTrust = Math.min(100, memberTrust + 3)
+        text = 'Полит вернулся с берега с мешком ячменя и картиной местности в голове.'
+        break
+      }
+      case 'kyros': {
+        if (res.pitch < 1) return
+        res.pitch -= 1
+        flags.hull_sealed = true
+        memberTrust = Math.min(100, memberTrust + 4)
+        trust = Math.min(100, trust + 3)
+        text = 'Кир просмолил швы. Корпус держит воду — корабль готов к морю.'
+        break
+      }
+      case 'smith': {
+        if (res.tin < 1) return
+        res.tin -= 1
+        res.bronze += 2
+        memberTrust = Math.min(100, memberTrust + 3)
+        text = 'Лаэрк сплавил олово с медью. Две новые чушки бронзы легли в трюм.'
+        break
+      }
+      case 'eurylochus': {
+        // Must mirror makeFinalChoice exactly — he is the player's main signpost.
+        const missing: string[] = []
+        if (!flags.hull_sealed) missing.push('корпус не просмолён')
+        if (res.food < 3) missing.push(`провизии ${res.food} из 3`)
+        if (trust < 30) missing.push(`доверие ${trust}% из 30%`)
+        const stormAnswered =
+          state.athenaFavor >= 25 || trust >= 60 || res.food >= 6
+        if (state.poseidonWrath >= 50 && !stormAnswered) {
+          missing.push(
+            `Посейдон в ярости (${state.poseidonWrath}) — нужна Афина 25, доверие 60% или 6 провизии`
+          )
+        }
+        text = missing.length
+          ? `Евриох: «К отплытию не готовы — ${missing.join('; ')}».`
+          : 'Евриох: «Корабль готов. Я редко это говорю, но — готов».'
+        break
+      }
+      default:
+        return
+    }
+
+    set({
+      resources: res,
+      flags,
+      crewTrust: trust,
+      odysseus: { ...state.odysseus, nostos },
+      crew: state.crew.map(m => (m.id === memberId ? { ...m, trust: memberTrust } : m)),
+      crewActionDay: { ...state.crewActionDay, [memberId]: state.daysElapsed },
+      log: [...state.log, { text, type: memberId === 'eurylochus' ? 'story' : 'resource' }],
+    })
+  },
 
   startExploration: () => {
     const state = get()
@@ -430,43 +519,90 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   makeFinalChoice: (choice) => {
     const state = get()
-    const { resources, crewTrust, athenaFavor } = state
-    const goodEnding = resources.food >= 5 && crewTrust >= 40 && athenaFavor >= 20
-    const badEnding = resources.food < 3 || crewTrust < 30
+    const { resources, crewTrust, poseidonWrath, flags } = state
+    // An unsealed hull is a hole below the waterline: pitch finally matters, and
+    // Poseidon's wrath finally does something other than sit in the save file.
+    const sealed = !!flags.hull_sealed
+    const seaworthy = sealed && resources.food >= 3 && crewTrust >= 30
+    const stormy = poseidonWrath >= 50
+
+    const sail = (athena: number, extraTrust: number, res = resources): boolean => {
+      if (!seaworthy) return false
+      // Athena's favour is what carries you through an angry sea
+      return !stormy || athena >= 25 || crewTrust + extraTrust >= 60 || res.food >= 6
+    }
 
     if (choice === 'sail') {
-      if (badEnding) {
-        set({ phase: 'death', log: [...state.log, { text: 'Корабль ушёл в шторм. Море не простило.', type: 'story' }] })
-      } else {
+      if (sail(state.athenaFavor, 0)) {
         set({ phase: 'victory', log: [...state.log, { text: 'Корабль отплыл. Итака ждёт.', type: 'story' }] })
+      } else {
+        const why = !sealed
+          ? 'Швы разошлись на первой же волне. Корпус так и не просмолили.'
+          : resources.food < 3
+            ? 'Провизия кончилась раньше берега.'
+            : crewTrust < 30
+              ? 'Команда бросила вёсла посреди пролива.'
+              : 'Посейдон ждал за мысом. Шторм не оставил ничего.'
+        set({ phase: 'death', log: [...state.log, { text: why, type: 'story' }] })
       }
-    } else if (choice === 'ritual') {
-      if (resources.food >= 2 && resources.gold >= 2) {
+      return
+    }
+
+    if (choice === 'ritual') {
+      if (resources.food < 2 || resources.gold < 2) {
+        set({ phase: sail(state.athenaFavor, 0) ? 'victory' : 'death' })
+        return
+      }
+      const newRes = { ...resources, food: resources.food - 2, gold: resources.gold - 2 }
+      const newAthena = Math.min(100, state.athenaFavor + 15)
+      if (sail(newAthena, 0, newRes)) {
         set({
           phase: 'victory',
-          resources: { ...resources, food: resources.food - 2, gold: resources.gold - 2 },
-          athenaFavor: Math.min(100, athenaFavor + 15),
+          resources: newRes,
+          athenaFavor: newAthena,
+          poseidonWrath: Math.max(0, poseidonWrath - 5),
           log: [...state.log, { text: 'Ритуал совершён. Афина приняла жертву. Корабль отплыл.', type: 'divine' }],
         })
       } else {
-        set({ phase: goodEnding ? 'victory' : 'death' })
-      }
-    } else {
-      if (crewTrust >= 50) {
         set({
-          phase: 'victory',
-          crewTrust: Math.min(100, crewTrust + 15),
-          log: [...state.log, { text: 'Ты поговорил с командой. Они верят тебе. Корабль отплыл.', type: 'story' }],
+          phase: 'death',
+          resources: newRes,
+          athenaFavor: newAthena,
+          log: [...state.log, {
+            text: sealed
+              ? 'Афина услышала. Посейдон — нет. Море оказалось сильнее молитвы.'
+              : 'Жертва принесена в непросмолённом корабле. Боги не чинят швы.',
+            type: 'divine',
+          }],
         })
-      } else {
-        set({ phase: goodEnding ? 'victory' : 'death' })
       }
+      return
+    }
+
+    // talk
+    if (crewTrust >= 50 && sail(state.athenaFavor, 15)) {
+      set({
+        phase: 'victory',
+        crewTrust: Math.min(100, crewTrust + 15),
+        log: [...state.log, { text: 'Ты поговорил с командой. Они гребли всю ночь и вывели корабль.', type: 'story' }],
+      })
+    } else {
+      set({
+        phase: 'death',
+        log: [...state.log, {
+          text: crewTrust < 50
+            ? 'Слова не хватило. Команда слушала молча и не поверила.'
+            : 'Они верили тебе до конца. Этого не хватило против моря.',
+          type: 'story',
+        }],
+      })
     }
   },
 
   resetGame: () => set({
     phase: 'menu',
     fromExploration: false,
+    crewActionDay: {},
     daysElapsed: 0,
     odysseus: { ...initialOdysseus },
     resources: { ...initialResources },
