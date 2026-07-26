@@ -6,6 +6,7 @@ import type {
 import { act1Events } from '../data/events'
 import { shadowOfHector, poseidonMessenger } from '../data/boss'
 import { initialCrew } from '../data/crew'
+import { loadMeta, saveMeta, worldFlagsOnly } from './meta'
 
 interface GameState {
   phase: GamePhase
@@ -45,6 +46,7 @@ interface GameState {
   addPickup: (kind: 'food' | 'gold' | 'pitch') => void
   damagePlayer: (amount: number) => void
   endDuel: (won: boolean) => void
+  commitRun: (outcome: 'death' | 'victory') => void
   makeChoice: (choice: Choice) => void
   continueAfterChoice: () => void
   startFinalBoss: () => void
@@ -180,6 +182,19 @@ export const useGameStore = create<GameState>((set, get) => ({
   startGame: () => {
     const state = get()
     const fixedEvent = act1Events.find(e => e.isFixed) ?? null
+    // The world carries over between runs: DCS keeps falling, knowledge stays known.
+    const meta = loadMeta()
+    const carriedFlags = { ...meta.flags }
+    const startLog: LogEntry[] = [{ text: 'Троя пала. Море ждёт.', type: 'story' }]
+    if (meta.runs > 0) {
+      startLog.push({
+        text: `Путь ${meta.runs + 1}-й. Боги отступили ещё дальше — DCS ${meta.dcs}.`,
+        type: 'divine',
+      })
+    }
+    if (carriedFlags.knows_curse_details) {
+      startLog.push({ text: 'Ты помнишь слова провидца из прошлой жизни.', type: 'divine' })
+    }
     set({
       phase: fixedEvent ? 'event' : 'location',
       runNumber: state.runNumber + 1,
@@ -190,18 +205,34 @@ export const useGameStore = create<GameState>((set, get) => ({
       crewTrust: 35,
       athenaFavor: 10,
       poseidonWrath: 30,
-      dcs: 85,
+      dcs: meta.dcs,
       completedEvents: [],
-      availableEvents: buildAvailableEvents([], {}),
+      availableEvents: buildAvailableEvents([], carriedFlags),
       bossPhase: 0,
       bossDefeated: false,
-      flags: {},
+      flags: carriedFlags,
       fromExploration: false,
       activeEvent: fixedEvent,
       activeBoss: null,
       activeBossPhase: null,
       choiceResult: null,
-      log: [{ text: 'Троя пала. Море ждёт.', type: 'story' }],
+      log: startLog,
+    })
+    saveMeta({ ...meta, runs: meta.runs + 1 })
+  },
+
+  /** Persist world state when a run ends — the gods keep receding. */
+  commitRun: (outcome: 'death' | 'victory') => {
+    const state = get()
+    const meta = loadMeta()
+    const drop = outcome === 'death' ? 5 : 2
+    saveMeta({
+      ...meta,
+      dcs: Math.max(0, state.dcs - drop),
+      flags: { ...meta.flags, ...worldFlagsOnly(state.flags) },
+      deaths: meta.deaths + (outcome === 'death' ? 1 : 0),
+      victories: meta.victories + (outcome === 'victory' ? 1 : 0),
+      bestNostos: Math.max(meta.bestNostos, state.odysseus.nostos),
     })
   },
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useGameStore } from '../store/gameStore'
+import { sfx } from '../audio/sfx'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const CW = 960, CH = 540
@@ -12,19 +13,25 @@ const JUMP_BUF_MS = 100
 const DASH_SPD = 760
 const DASH_MS = 180
 const DASH_CD_MS = 800
-const ATK_MS = 260
-const ATK_CD_MS = 430
+const ATK_MS = 240
+const ATK_CD_MS = 300
 const ATK_RANGE = 64
-const ATK_DMG = 34
+const COMBO_WINDOW_MS = 520          // press again within this to chain
+const COMBO_DMG = [30, 34, 52]       // third swing is the payoff
+const PARRY_MS = 320                 // total guard duration
+const PARRY_PERFECT_MS = 160         // early frames negate damage and stagger
+const PARRY_CD_MS = 520
 const INVULN_MS = 800
-const MAX_PARTICLES = 350
+const HITSTOP_LIGHT = 55             // freeze-frames sell the impact
+const HITSTOP_HEAVY = 110
+const MAX_PARTICLES = 380
 
 // ─── Palette ─────────────────────────────────────────────────────────────────
 const P = {
   skyStops: ['#030014', '#0a0530', '#1a0a44', '#2c0e3c', '#481408', '#6a2008'] as string[],
   moon: '#e8e0c8', moonGlow: 'rgba(232,224,200,0.10)',
   cityFill: '#0a0503', cityGlow: '#ff5510',
-  ruinFill: '#120a06',
+  ruinFill: '#120a06', fgFill: '#050302',
   seaTop: '#06122a', seaBot: '#020812', seaLine: '#0e2b48', moonPath: 'rgba(220,210,170,0.05)',
   gndTop: '#42300c', gnd: '#2c1e08', gndDark: '#1a1205', pebble: '#54400f',
   stoneA: '#1c1209', stoneB: '#2c1c0e', stoneC: '#3e2814', stoneHi: '#5c3e20',
@@ -34,7 +41,7 @@ const P = {
   fire0: '#ff5500', fire1: '#dd2200', fire2: '#ffaa00', fireCore: '#fff4d0',
   portal0: '#5020b0', portal1: '#9050e8', portalCore: '#d8b0ff',
   npcRobe: '#3a2a10', npcSkin: '#6a3e14',
-  enemyRag: '#241408', enemyEye: '#ff3000', dogFur: '#1c1410',
+  enemyRag: '#241408', enemyEye: '#ff3000', dogFur: '#1c1410', archerCloak: '#1e2a18',
   hector: '#100a08', hectorArmor: '#5a3a10', hectorFlame: '#ff4400',
   ghost: 'rgba(150,170,220,0.16)',
   uiBg: 'rgba(4,2,1,0.78)', uiBorder: '#c8941a', uiText: '#e0b860', uiDim: '#8a6830',
@@ -48,14 +55,19 @@ interface Player {
   walkPhase: number; idlePhase: number; coyote: number; jumpBuf: number; landTimer: number
   dashT: number; dashCd: number; dashDir: Facing
   atkT: number; atkCd: number; invuln: number; flash: number
+  combo: number; comboT: number
+  parryT: number; parryCd: number; parryFlash: number
+  stepT: number
 }
 interface Enemy {
-  id: string; kind: 'marauder' | 'dog'
+  id: string; kind: 'marauder' | 'dog' | 'archer'
   x: number; y: number; vx: number; homeX: number
   hp: number; maxHp: number; facing: Facing
-  state: 'patrol' | 'chase' | 'windup' | 'strike' | 'dead'
+  state: 'patrol' | 'chase' | 'windup' | 'strike' | 'stagger' | 'dead'
   t: number; phase: number; flash: number; deadT: number
 }
+interface Projectile { x: number; y: number; vx: number; vy: number; life: number; from: 'archer' }
+interface DamageNum { x: number; y: number; v: number; life: number; crit: boolean }
 interface Hector {
   x: number; y: number; vx: number; vy: number; facing: Facing
   hp: number; maxHp: number
@@ -122,7 +134,9 @@ const OBJS_TROY: LevelObj[] = [
 const ENEMIES_TROY: Omit<Enemy, 'state' | 't' | 'phase' | 'flash' | 'deadT'>[] = [
   { id: 'dog1',  kind: 'dog',      x: 1330, y: GROUND_Y, vx: 0, homeX: 1330, hp: 40, maxHp: 40, facing: 1 },
   { id: 'mar1',  kind: 'marauder', x: 2120, y: GROUND_Y, vx: 0, homeX: 2120, hp: 70, maxHp: 70, facing: -1 },
+  { id: 'arc1',  kind: 'archer',   x: 2560, y: 374,      vx: 0, homeX: 2560, hp: 34, maxHp: 34, facing: -1 },
   { id: 'dog2',  kind: 'dog',      x: 2940, y: GROUND_Y, vx: 0, homeX: 2940, hp: 40, maxHp: 40, facing: 1 },
+  { id: 'arc2',  kind: 'archer',   x: 3230, y: 390,      vx: 0, homeX: 3230, hp: 34, maxHp: 34, facing: -1 },
   { id: 'mar2',  kind: 'marauder', x: 3560, y: GROUND_Y, vx: 0, homeX: 3560, hp: 70, maxHp: 70, facing: -1 },
 ]
 
@@ -151,6 +165,7 @@ const OBJS_THRACE: LevelObj[] = [
 ]
 const ENEMIES_THRACE: Omit<Enemy, 'state' | 't' | 'phase' | 'flash' | 'deadT'>[] = [
   { id: 'tdog1', kind: 'dog',      x: 960,  y: GROUND_Y, vx: 0, homeX: 960,  hp: 40, maxHp: 40, facing: 1 },
+  { id: 'tarc1', kind: 'archer',   x: 1700, y: 345,      vx: 0, homeX: 1700, hp: 34, maxHp: 34, facing: -1 },
   { id: 'tmar1', kind: 'marauder', x: 1980, y: GROUND_Y, vx: 0, homeX: 1980, hp: 70, maxHp: 70, facing: -1 },
 ]
 
@@ -202,6 +217,18 @@ const prand = (i: number) => {
   const s = Math.sin(i * 127.1 + 311.7) * 43758.5453
   return s - Math.floor(s)
 }
+/** Vertical two-stop fill — cheap volume on otherwise flat silhouettes. */
+function vgrad(ctx: CanvasRenderingContext2D, y0: number, y1: number, top: string, bot: string) {
+  const g = ctx.createLinearGradient(0, y0, 0, y1)
+  g.addColorStop(0, top); g.addColorStop(1, bot)
+  return g
+}
+/** Horizontal fill used for side-lit props. */
+function hgrad(ctx: CanvasRenderingContext2D, x0: number, x1: number, left: string, right: string) {
+  const g = ctx.createLinearGradient(x0, 0, x1, 0)
+  g.addColorStop(0, left); g.addColorStop(1, right)
+  return g
+}
 
 // ─── Offscreen layer pre-render (performance) ────────────────────────────────
 function makeSkyLayer(dcs: number): HTMLCanvasElement {
@@ -223,59 +250,100 @@ function makeSkyLayer(dcs: number): HTMLCanvasElement {
     g.beginPath(); g.arc(x, y, sz, 0, Math.PI * 2); g.fill()
   }
   g.globalAlpha = 1
-  // Moon with glow + craters
-  const mx = CW * 0.78, my = 86
-  for (let r = 90; r > 30; r -= 14) {
-    g.fillStyle = P.moonGlow
-    g.beginPath(); g.arc(mx, my, r, 0, Math.PI * 2); g.fill()
-  }
-  g.fillStyle = P.moon
-  g.beginPath(); g.arc(mx, my, 28, 0, Math.PI * 2); g.fill()
-  g.fillStyle = 'rgba(160,150,130,0.5)'
-  g.beginPath(); g.arc(mx - 9, my - 6, 5, 0, Math.PI * 2); g.fill()
-  g.beginPath(); g.arc(mx + 7, my + 8, 3.5, 0, Math.PI * 2); g.fill()
-  g.beginPath(); g.arc(mx + 11, my - 9, 2.5, 0, Math.PI * 2); g.fill()
+  // Moon — one soft falloff, then the disc, then faint maria
+  const mx = CW * 0.78, my = 82
+  const halo = g.createRadialGradient(mx, my, 8, mx, my, 120)
+  halo.addColorStop(0, 'rgba(226,220,196,0.22)')
+  halo.addColorStop(0.28, 'rgba(200,196,180,0.09)')
+  halo.addColorStop(1, 'rgba(180,180,170,0)')
+  g.fillStyle = halo
+  g.fillRect(mx - 120, my - 120, 240, 240)
+  const disc = g.createRadialGradient(mx - 6, my - 7, 2, mx, my, 24)
+  disc.addColorStop(0, '#f6f2e2')
+  disc.addColorStop(0.7, '#e2dcc4')
+  disc.addColorStop(1, '#c6bfa4')
+  g.fillStyle = disc
+  g.beginPath(); g.arc(mx, my, 24, 0, Math.PI * 2); g.fill()
+  g.globalAlpha = 0.18
+  g.fillStyle = '#6c6552'
+  g.beginPath(); g.arc(mx - 8, my - 5, 6, 0, Math.PI * 2); g.fill()
+  g.beginPath(); g.arc(mx + 6, my + 7, 4, 0, Math.PI * 2); g.fill()
+  g.beginPath(); g.arc(mx + 9, my - 8, 2.6, 0, Math.PI * 2); g.fill()
+  g.globalAlpha = 1
   return c
 }
 
+/**
+ * Burning Troy on the horizon. Kept deliberately small and near-black: it is a
+ * city seen from a beach kilometres away, not a wall behind the player.
+ */
 function makeCityLayer(): HTMLCanvasElement {
-  // burning Troy silhouette strip, drawn once, tiled with parallax
-  const W = 1400, H = 240
+  const W = 1400, H = 120
   const c = document.createElement('canvas')
   c.width = W; c.height = H
   const g = c.getContext('2d')!
-  g.fillStyle = P.cityFill
-  // wall base
-  g.fillRect(0, H - 60, W, 60)
-  // merlons
-  for (let x = 0; x < W; x += 36) g.fillRect(x, H - 72, 20, 12)
-  // towers
-  const towers = [120, 340, 560, 800, 1020, 1240]
+
+  // fire glow behind the skyline, so towers read as backlit
+  const glow = g.createLinearGradient(0, H - 96, 0, H)
+  glow.addColorStop(0, 'rgba(255,90,20,0)')
+  glow.addColorStop(0.55, 'rgba(255,96,22,0.20)')
+  glow.addColorStop(1, 'rgba(255,130,40,0.34)')
+  g.fillStyle = glow
+  g.fillRect(0, H - 96, W, 96)
+
+  g.fillStyle = '#070403'
+  // curtain wall
+  g.fillRect(0, H - 26, W, 26)
+  for (let x = 0; x < W; x += 22) g.fillRect(x, H - 32, 12, 7)
+  // towers of varying height, none tall enough to crowd the play area
+  const towers = [95, 268, 431, 605, 742, 918, 1096, 1278]
   towers.forEach((tx, i) => {
-    const th = 90 + prand(i + 40) * 70
-    const tw = 54 + prand(i + 80) * 26
-    g.fillRect(tx - tw / 2, H - 60 - th, tw, th)
-    for (let mx = tx - tw / 2; mx < tx + tw / 2 - 8; mx += 16) g.fillRect(mx, H - 72 - th, 10, 12)
+    const th = 26 + prand(i + 40) * 34
+    const tw = 26 + prand(i + 80) * 16
+    g.fillRect(tx - tw / 2, H - 26 - th, tw, th)
+    for (let m = tx - tw / 2; m < tx + tw / 2 - 5; m += 10) g.fillRect(m, H - 32 - th, 6, 7)
   })
-  // gate arch
-  g.fillRect(660, H - 130, 90, 70)
-  g.fillStyle = '#000'
-  g.beginPath(); g.arc(705, H - 60, 26, Math.PI, 0); g.fill()
+  // the Scaean gate
+  g.fillRect(645, H - 62, 62, 36)
+  g.fillStyle = 'rgba(255,120,40,0.55)'
+  g.beginPath(); g.arc(676, H - 26, 15, Math.PI, 0); g.fill()
+  // fires burning on the roofs
+  g.fillStyle = 'rgba(255,140,50,0.5)'
+  towers.forEach((tx, i) => {
+    if (prand(i + 200) < 0.45) return
+    const th = 26 + prand(i + 40) * 34
+    g.beginPath()
+    g.ellipse(tx, H - 30 - th, 10 + prand(i + 210) * 6, 5, 0, 0, Math.PI * 2)
+    g.fill()
+  })
   return c
 }
 
+/** Ruined colonnade on the beach itself — mid-distance, stands on the ground line. */
 function makeRuinsLayer(): HTMLCanvasElement {
-  const W = 1100, H = 200
+  const W = 1100, H = 150
   const c = document.createElement('canvas')
   c.width = W; c.height = H
   const g = c.getContext('2d')!
   g.fillStyle = P.ruinFill
-  for (let i = 0; i < 9; i++) {
+  for (let i = 0; i < 11; i++) {
     const x = prand(i + 11) * W
-    const h = 50 + prand(i + 22) * 110
-    const w = 14 + prand(i + 33) * 22
+    const h = 34 + prand(i + 22) * 96
+    const w = 11 + prand(i + 33) * 16
     g.fillRect(x, H - h, w, h)
-    if (prand(i + 44) > 0.5) g.fillRect(x - 8, H - h, w + 16, 10)
+    // broken capital
+    if (prand(i + 44) > 0.45) g.fillRect(x - 6, H - h, w + 12, 7)
+    // fallen drum beside it
+    if (prand(i + 55) > 0.6) {
+      g.beginPath()
+      g.ellipse(x + w + 14, H - 5, 13, 5, 0, 0, Math.PI * 2)
+      g.fill()
+    }
+  }
+  // low architrave fragments lying along the sand
+  for (let i = 0; i < 5; i++) {
+    const x = prand(i + 77) * W
+    g.fillRect(x, H - 9, 44 + prand(i + 88) * 40, 9)
   }
   return c
 }
@@ -295,7 +363,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
   const cbRef = useRef({ onExit, onTriggerEvent, onDuelEnd })
   cbRef.current = { onExit, onTriggerEvent, onDuelEnd }
 
-  const keysRef = useRef({ left: false, right: false, jump: false, action: false, dash: false, attack: false })
+  const keysRef = useRef({ left: false, right: false, jump: false, action: false, dash: false, attack: false, parry: false })
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -328,6 +396,9 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       walkPhase: 0, idlePhase: 0, coyote: 0, jumpBuf: 0, landTimer: 0,
       dashT: 0, dashCd: 0, dashDir: 1,
       atkT: 0, atkCd: 0, invuln: 0, flash: 0,
+      combo: 0, comboT: 0,
+      parryT: 0, parryCd: 0, parryFlash: 0,
+      stepT: 0,
     }
     const spawnEnemies = (loc: LocKey): Enemy[] =>
       LOCATIONS[loc].enemies
@@ -350,6 +421,8 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
     } : null
 
     const particles: Particle[] = []
+    let projectiles: Projectile[] = []
+    let dmgNums: DamageNum[] = []
     let emberT = 0, ashT = 0
     let camX = 0
     let time = 0
@@ -358,6 +431,8 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
     let dialogue: { name: string; role: string; line: string; t: number } | null = null
     let prompt: { label: string; x: number; y: number } | null = null
     let shake = 0
+    let hitStop = 0
+    let lightning = 0, lightningT = 2 + Math.random() * 6
     let duelEnded = false
     let raf = 0
 
@@ -398,7 +473,10 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       if (k === 'e' || k === 'enter') keys.action = true
       if (k === 'shift') keys.dash = true
       if (k === 'j' || k === 'x' || k === 'f') keys.attack = true
+      if (k === 'k' || k === 'c') keys.parry = true
+      if (k === 'm') sfx.toggle()
       if (k === 'escape' && !isDuel) cbRef.current.onExit()
+      sfx.unlock()
     }
     const ku = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase()
@@ -408,26 +486,70 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       if (k === 'e' || k === 'enter') keys.action = false
       if (k === 'shift') keys.dash = false
       if (k === 'j' || k === 'x' || k === 'f') keys.attack = false
+      if (k === 'k' || k === 'c') keys.parry = false
     }
     window.addEventListener('keydown', kd)
     window.addEventListener('keyup', ku)
+    sfx.startAmbient()
 
     // ── Combat helpers ──
+    /** Returns true when the blow was answered by the guard instead of the body. */
+    const tryParry = (fromX: number): 'perfect' | 'blocked' | null => {
+      if (player.parryT <= 0) return null
+      const facingIt = (fromX - player.x) * player.facing > 0
+      if (!facingIt) return null
+      const elapsed = PARRY_MS - player.parryT
+      return elapsed <= PARRY_PERFECT_MS ? 'perfect' : 'blocked'
+    }
     const hurtPlayer = (dmg: number, fromX: number) => {
       if (player.invuln > 0 || player.dashT > 0) return
+      const par = tryParry(fromX)
+      if (par) {
+        player.parryFlash = 240
+        player.invuln = 260
+        sfx.parry()
+        const dir: Facing = fromX > player.x ? 1 : -1
+        burst(player.x + dir * 22, player.y - 46, par === 'perfect' ? 16 : 8, 235, 225, 255, par === 'perfect' ? 260 : 150)
+        if (par === 'perfect') {
+          hitStop = Math.max(hitStop, HITSTOP_HEAVY)
+          shake = Math.max(shake, 7)
+          dmgNums.push({ x: player.x, y: player.y - 96, v: 0, life: 0.9, crit: true })
+          // stagger whoever swung
+          for (const en of enemies) {
+            if (en.state !== 'dead' && Math.abs(en.x - fromX) < 40) { en.state = 'stagger'; en.t = 0; en.vx = dir * 150 }
+          }
+          if (hector && Math.abs(hector.x - fromX) < 60 && hector.state !== 'dying') { hector.state = 'stagger'; hector.t = 0 }
+        } else {
+          hitStop = Math.max(hitStop, HITSTOP_LIGHT)
+          useGameStore.getState().damagePlayer(Math.max(1, Math.round(dmg * 0.35)))
+        }
+        return
+      }
       player.invuln = INVULN_MS
       player.flash = 200
+      player.combo = 0
       player.vx = player.x < fromX ? -260 : 260
       player.vy = -220
       shake = 9
+      hitStop = Math.max(hitStop, HITSTOP_LIGHT)
+      sfx.hurt()
       burst(player.x, player.y - 40, 10, 200, 30, 20)
+      dmgNums.push({ x: player.x, y: player.y - 84, v: dmg, life: 0.9, crit: false })
       useGameStore.getState().damagePlayer(dmg)
     }
 
     // ── Main loop ──
     const loop = (ts: number) => {
-      const dt = clamp((ts - lastTs) / 1000, 0, 0.033)
+      const rawDt = clamp((ts - lastTs) / 1000, 0, 0.033)
       lastTs = ts
+      // Hit-stop freezes simulation for a few frames while rendering continues —
+      // the single biggest contributor to how a hit *feels*.
+      if (hitStop > 0) {
+        hitStop -= rawDt * 1000
+        raf = requestAnimationFrame(loop)
+        return
+      }
+      const dt = rawDt
       time += dt
 
       // ════ UPDATE ════
@@ -435,13 +557,16 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       if (keys.left) moveVel = -MOVE_SPD
       else if (keys.right) moveVel = MOVE_SPD
       if (moveVel !== 0) player.facing = moveVel > 0 ? 1 : -1
+      // guarding roots you in place
+      if (player.parryT > 0) moveVel *= 0.25
 
       // dash
       player.dashCd = Math.max(0, player.dashCd - dt * 1000)
-      if (keys.dash && player.dashCd <= 0 && player.dashT <= 0) {
+      if (keys.dash && player.dashCd <= 0 && player.dashT <= 0 && player.parryT <= 0) {
         player.dashT = DASH_MS
         player.dashDir = player.facing
         player.dashCd = DASH_CD_MS
+        sfx.dash()
         burst(player.x, player.y - 20, 6, 200, 150, 60, 90)
       }
       if (player.dashT > 0) {
@@ -450,44 +575,86 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         addP({ x: player.x - player.dashDir * 14, y: player.y - 18 - Math.random() * 30, vx: -player.dashDir * 60, vy: -20, life: 0.22, max: 0.22, size: 3, r: 220, g: 170, b: 80, grav: 0 })
       }
 
-      // attack
+      // parry / guard
+      player.parryCd = Math.max(0, player.parryCd - dt * 1000)
+      player.parryT = Math.max(0, player.parryT - dt * 1000)
+      player.parryFlash = Math.max(0, player.parryFlash - dt * 1000)
+      if (keys.parry && player.parryCd <= 0 && player.parryT <= 0 && player.dashT <= 0) {
+        player.parryT = PARRY_MS
+        player.parryCd = PARRY_CD_MS
+        keys.parry = false
+      }
+
+      // attack — three-swing chain, the third lands heavy
       player.atkCd = Math.max(0, player.atkCd - dt * 1000)
       player.atkT = Math.max(0, player.atkT - dt * 1000)
-      if (keys.attack && player.atkCd <= 0) {
-        player.atkT = ATK_MS
-        player.atkCd = ATK_CD_MS
-        const hx = player.x + player.facing * ATK_RANGE * 0.6
-        // hit enemies
+      player.comboT = Math.max(0, player.comboT - dt * 1000)
+      if (player.comboT <= 0 && player.atkT <= 0) player.combo = 0
+      if (keys.attack && player.atkCd <= 0 && player.parryT <= 0) {
+        const step = player.combo % 3
+        const heavy = step === 2
+        player.atkT = heavy ? ATK_MS + 90 : ATK_MS
+        player.atkCd = heavy ? ATK_CD_MS + 220 : ATK_CD_MS
+        player.combo = step + 1
+        player.comboT = COMBO_WINDOW_MS
+        const dmg = COMBO_DMG[step]
+        const reach = heavy ? ATK_RANGE + 16 : ATK_RANGE
+        sfx.swing(step)
+        // heavy swing lunges forward slightly
+        if (heavy && player.onGround) player.x += player.facing * 14
+        const hx = player.x + player.facing * reach * 0.6
+        let connected = false
         for (const en of enemies) {
           if (en.state === 'dead') continue
-          if (Math.abs(en.x - hx) < ATK_RANGE && Math.abs(en.y - player.y) < 70) {
-            en.hp -= ATK_DMG
+          if (Math.abs(en.x - hx) < reach && Math.abs(en.y - player.y) < 70) {
+            connected = true
+            en.hp -= dmg
             en.flash = 120
-            en.vx = player.facing * 200
-            burst(en.x, en.y - 30, 8, 255, 200, 120)
-            shake = Math.max(shake, 4)
+            en.vx = player.facing * (heavy ? 380 : 200)
+            dmgNums.push({ x: en.x, y: en.y - 60, v: dmg, life: 0.8, crit: heavy })
+            burst(en.x, en.y - 30, heavy ? 14 : 8, 255, 200, 120, heavy ? 260 : 180)
+            shake = Math.max(shake, heavy ? 8 : 4)
             if (en.hp <= 0) {
               en.state = 'dead'; en.deadT = 0
               persist.dead.add(en.id)
+              sfx.enemyDie()
               burst(en.x, en.y - 30, 18, 120, 40, 30, 240)
             } else {
               en.state = 'chase'
             }
           }
         }
-        // hit hector
         if (hector && hector.state !== 'dying' && hector.state !== 'enter') {
-          if (Math.abs(hector.x - hx) < ATK_RANGE + 20 && Math.abs(hector.y - player.y) < 90) {
-            hector.hp -= 25
+          if (Math.abs(hector.x - hx) < reach + 20 && Math.abs(hector.y - player.y) < 90) {
+            connected = true
+            const hdmg = heavy ? 40 : 24
+            hector.hp -= hdmg
             hector.flash = 110
-            burst(hector.x, hector.y - 60, 10, 255, 120, 40)
-            shake = Math.max(shake, 5)
+            dmgNums.push({ x: hector.x, y: hector.y - 110, v: hdmg, life: 0.8, crit: heavy })
+            burst(hector.x, hector.y - 60, heavy ? 16 : 10, 255, 120, 40, heavy ? 280 : 180)
+            shake = Math.max(shake, heavy ? 9 : 5)
             if (hector.hp <= 0) {
               hector.state = 'dying'; hector.t = 0
-              shake = 14
+              shake = 16
+              hitStop = HITSTOP_HEAVY * 2
+              sfx.bossRoar()
             }
           }
         }
+        // arrows can be swatted out of the air
+        projectiles = projectiles.filter(pr => {
+          if (Math.abs(pr.x - hx) < reach && Math.abs(pr.y - (player.y - 44)) < 46) {
+            connected = true
+            burst(pr.x, pr.y, 6, 220, 210, 180, 140)
+            return false
+          }
+          return true
+        })
+        if (connected) {
+          sfx.hit(heavy)
+          hitStop = Math.max(hitStop, heavy ? HITSTOP_HEAVY : HITSTOP_LIGHT)
+        }
+        keys.attack = false
       }
 
       player.invuln = Math.max(0, player.invuln - dt * 1000)
@@ -514,19 +681,24 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       if (keys.jump) { player.jumpBuf = JUMP_BUF_MS; keys.jump = false }
       if (player.jumpBuf > 0 && (player.onGround || player.coyote > 0)) {
         player.vy = JUMP_VEL; player.jumpBuf = 0; player.coyote = 0; player.onGround = false
+        sfx.jump()
         for (let i = 0; i < 5; i++) addP({ x: player.x + (Math.random() - 0.5) * 20, y: player.y, vx: (Math.random() - 0.5) * 120, vy: -40, life: 0.3, max: 0.3, size: 2, r: 120, g: 95, b: 60, grav: 300 })
       }
       if (player.onGround && !player.wasGround) {
         player.landTimer = 150
+        sfx.land()
         for (let i = 0; i < 7; i++) addP({ x: player.x + (Math.random() - 0.5) * 26, y: player.y, vx: (Math.random() - 0.5) * 160, vy: -50, life: 0.35, max: 0.35, size: 2.2, r: 120, g: 95, b: 60, grav: 300 })
       }
       player.landTimer = Math.max(0, player.landTimer - dt * 1000)
 
       if (player.onGround && Math.abs(player.vx) > 10) {
         player.walkPhase += dt * 11
+        player.stepT -= dt * 1000
+        if (player.stepT <= 0) { player.stepT = 290; sfx.step() }
         if (Math.random() < 0.12) addP({ x: player.x - player.facing * 10, y: player.y, vx: -player.facing * 40, vy: -30, life: 0.25, max: 0.25, size: 1.6, r: 110, g: 88, b: 55, grav: 200 })
       } else {
         player.idlePhase += dt * 2
+        player.stepT = 0
       }
       player.x = clamp(player.x, 20, levelW - 20)
 
@@ -538,33 +710,58 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         if (en.state === 'dead') { en.deadT += dt; continue }
         const dx = player.x - en.x
         const adx = Math.abs(dx)
-        const aggro = en.kind === 'dog' ? 340 : 260
-        const reach = en.kind === 'dog' ? 42 : 56
+        const isArcher = en.kind === 'archer'
+        const aggro = isArcher ? 430 : en.kind === 'dog' ? 340 : 260
+        const reach = isArcher ? 380 : en.kind === 'dog' ? 42 : 56
         switch (en.state) {
           case 'patrol': {
+            // Archers hold their perch; the others walk a beat.
             const span = 130
-            en.vx = (en.kind === 'dog' ? 60 : 38) * en.facing
-            if (en.x > en.homeX + span) en.facing = -1
-            if (en.x < en.homeX - span) en.facing = 1
-            if (adx < aggro && Math.abs(player.y - en.y) < 90) en.state = 'chase'
+            en.vx = isArcher ? 0 : (en.kind === 'dog' ? 60 : 38) * en.facing
+            if (!isArcher) {
+              if (en.x > en.homeX + span) en.facing = -1
+              if (en.x < en.homeX - span) en.facing = 1
+            } else if (adx > 8) {
+              en.facing = dx > 0 ? 1 : -1
+            }
+            if (adx < aggro && Math.abs(player.y - en.y) < (isArcher ? 220 : 90)) en.state = 'chase'
             break
           }
           case 'chase': {
             en.facing = dx > 0 ? 1 : -1
-            en.vx = (en.kind === 'dog' ? 190 : 120) * en.facing
-            if (adx < reach) { en.state = 'windup'; en.t = 0; en.vx = 0 }
+            if (isArcher) {
+              // keep distance, then draw
+              en.vx = adx < 150 ? -110 * en.facing : 0
+              if (adx < reach && adx > 90) { en.state = 'windup'; en.t = 0; en.vx = 0 }
+            } else {
+              en.vx = (en.kind === 'dog' ? 190 : 120) * en.facing
+              if (adx < reach) { en.state = 'windup'; en.t = 0; en.vx = 0 }
+            }
             if (adx > aggro * 1.6) en.state = 'patrol'
             break
           }
           case 'windup': {
             en.vx = 0
             en.t += dt * 1000
-            if (en.t > (en.kind === 'dog' ? 320 : 450)) { en.state = 'strike'; en.t = 0 }
+            const tell = isArcher ? 620 : en.kind === 'dog' ? 320 : 450
+            if (en.t > tell) { en.state = 'strike'; en.t = 0 }
             break
           }
           case 'strike': {
             en.t += dt * 1000
-            if (en.t < 140) {
+            if (isArcher) {
+              if (en.t < 20) {
+                // loose one arrow, led slightly toward the player
+                const ax = en.x + en.facing * 18, ay = en.y - 46
+                const tx = player.x, ty = player.y - 42
+                const d = Math.max(60, Math.hypot(tx - ax, ty - ay))
+                const spd = 560
+                projectiles.push({ x: ax, y: ay, vx: ((tx - ax) / d) * spd, vy: ((ty - ay) / d) * spd - 40, life: 2.2, from: 'archer' })
+                sfx.swing(0)
+              } else if (en.t > 900) {
+                en.state = adx < aggro ? 'chase' : 'patrol'
+              }
+            } else if (en.t < 140) {
               en.vx = en.facing * (en.kind === 'dog' ? 360 : 240)
               if (adx < reach + 10 && Math.abs(player.y - en.y) < 60) {
                 hurtPlayer(en.kind === 'dog' ? 8 : 13, en.x)
@@ -576,11 +773,43 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
             }
             break
           }
+          case 'stagger': {
+            en.t += dt * 1000
+            en.vx *= 0.86
+            if (en.t > 700) { en.state = 'chase'; en.t = 0 }
+            break
+          }
         }
         en.x += en.vx * dt
         en.x = clamp(en.x, 40, levelW - 40)
       }
       enemies = enemies.filter(e => e.state !== 'dead' || e.deadT < 1.2)
+
+      // ── Arrows in flight ──
+      projectiles = projectiles.filter(pr => {
+        pr.life -= dt
+        if (pr.life <= 0) return false
+        pr.vy += 320 * dt
+        pr.x += pr.vx * dt
+        pr.y += pr.vy * dt
+        if (pr.y >= GROUND_Y) {
+          burst(pr.x, GROUND_Y, 4, 130, 110, 80, 90)
+          return false
+        }
+        if (Math.abs(pr.x - player.x) < 20 && pr.y > player.y - 78 && pr.y < player.y - 4) {
+          hurtPlayer(10, pr.x)
+          return false
+        }
+        return true
+      })
+
+      // ── Floating damage numbers ──
+      for (let i = dmgNums.length - 1; i >= 0; i--) {
+        const dn = dmgNums[i]
+        dn.life -= dt
+        dn.y -= dt * 34
+        if (dn.life <= 0) dmgNums.splice(i, 1)
+      }
 
       // ── Hector AI (duel) ──
       if (hector && !duelEnded) {
@@ -623,6 +852,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
               hector.waveX = hector.x
               hector.waveDir = hdx > 0 ? 1 : -1
               shake = 11
+              sfx.slam()
               burst(hector.x, GROUND_Y, 16, 255, 110, 30, 220)
             }
             break
@@ -659,6 +889,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
           pk.got = true
           persist.got.add(pk.id)
           st.addPickup(pk.kind)
+          sfx.pickup()
           burst(pk.x, pk.y, 10, 240, 200, 80, 130)
         }
       }
@@ -693,6 +924,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
             player.x = LOCATIONS[nl].startX
             player.y = GROUND_Y; player.vy = 0
             portalCd = 800
+            sfx.portal()
             persist.loc = nl
             persist.x = player.x
           } else if (nearest.npcId) {
@@ -724,6 +956,13 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         ashT = 120
         addP({ x: camX + Math.random() * CW, y: -8, vx: -18 + Math.random() * 24, vy: 26 + Math.random() * 26, life: 7, max: 7, size: 1.2 + Math.random() * 1.6, r: 130, g: 115, b: 105, grav: 0 })
       }
+      // distant lightning over the burning city
+      lightning = Math.max(0, lightning - dt * 1000)
+      lightningT -= dt
+      if (lightningT <= 0 && (location === 'troy' || isDuel)) {
+        lightningT = 7 + Math.random() * 13
+        lightning = 190
+      }
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i]
         p.life -= dt
@@ -752,23 +991,26 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       // sky (pre-rendered)
       if (skyLayer) ctx.drawImage(skyLayer, 0, 0)
 
-      // burning city silhouette (parallax 0.05) + flicker glow
+      // lightning wash — a two-stage flicker, brightest at the horizon
+      if (lightning > 0) {
+        const lf = lightning / 190
+        const stage = lf > 0.82 ? 1 : lf > 0.6 ? 0.35 : lf * 0.5
+        ctx.fillStyle = `rgba(180,190,235,${0.4 * stage})`
+        ctx.fillRect(0, 0, CW, CH * 0.62)
+      }
+
+      // warm haze where the burning city meets the water
       const flick = 0.5 + Math.sin(time * 9) * 0.18 + Math.sin(time * 23.7) * 0.1
-      const cityY = 96
-      ctx.globalAlpha = 0.35 * flick
+      ctx.globalAlpha = 0.5 * flick
       ctx.fillStyle = cityGlowGrad
-      ctx.fillRect(0, 0, CW, CH * 0.62)
+      ctx.fillRect(0, 150, CW, 175)
       ctx.globalAlpha = 1
-      const cityOff = -((camX * 0.05) % 1400)
+
+      // burning Troy on the horizon (parallax 0.04), base sitting on the sea line
+      const cityY = 318 - 120
+      const cityOff = -((camX * 0.04) % 1400)
       ctx.drawImage(cityLayer, cityOff, cityY)
       ctx.drawImage(cityLayer, cityOff + 1400, cityY)
-
-      // mid ruins (parallax 0.16)
-      ctx.globalAlpha = 0.8
-      const ruinsOff = -((camX * 0.16) % 1100)
-      ctx.drawImage(ruinsLayer, ruinsOff, 175)
-      ctx.drawImage(ruinsLayer, ruinsOff + 1100, 175)
-      ctx.globalAlpha = 1
 
       // sea with moon path
       ctx.fillStyle = seaGrad
@@ -787,6 +1029,13 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         }
         ctx.stroke()
       }
+      ctx.globalAlpha = 1
+
+      // beach ruins standing on the ground line (parallax 0.22)
+      ctx.globalAlpha = 0.85
+      const ruinsOff = -((camX * 0.22) % 1100)
+      ctx.drawImage(ruinsLayer, ruinsOff, GROUND_Y - 150)
+      ctx.drawImage(ruinsLayer, ruinsOff + 1100, GROUND_Y - 150)
       ctx.globalAlpha = 1
 
       // ground band
@@ -816,7 +1065,8 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       for (const pl of plats) {
         if (pl.x + pl.w < camX - 40 || pl.x > camX + CW + 40) continue
         if (pl.kind === 'stone') {
-          ctx.fillStyle = P.stoneB; rr(ctx, pl.x, pl.y, pl.w, pl.h, 3); ctx.fill()
+          ctx.fillStyle = vgrad(ctx, pl.y, pl.y + pl.h, '#3a2512', '#1a1008')
+          rr(ctx, pl.x, pl.y, pl.w, pl.h, 3); ctx.fill()
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke()
           ctx.fillStyle = P.stoneHi; ctx.fillRect(pl.x + 2, pl.y + 1.5, pl.w - 4, 2.5)
           ctx.strokeStyle = P.stoneA; ctx.lineWidth = 1
@@ -824,7 +1074,8 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
             ctx.beginPath(); ctx.moveTo(x, pl.y + 4); ctx.lineTo(x, pl.y + pl.h - 3); ctx.stroke()
           }
         } else if (pl.kind === 'wood') {
-          ctx.fillStyle = P.woodA; rr(ctx, pl.x, pl.y, pl.w, pl.h, 2); ctx.fill()
+          ctx.fillStyle = vgrad(ctx, pl.y, pl.y + pl.h, '#3c2110', '#1e1206')
+          rr(ctx, pl.x, pl.y, pl.w, pl.h, 2); ctx.fill()
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke()
           ctx.fillStyle = P.woodHi; ctx.fillRect(pl.x + 2, pl.y + 1.5, pl.w - 4, 2)
           ctx.strokeStyle = P.woodB; ctx.lineWidth = 1.4
@@ -832,11 +1083,21 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
             ctx.beginPath(); ctx.moveTo(x, pl.y + 2); ctx.lineTo(x, pl.y + pl.h - 2); ctx.stroke()
           }
         } else {
-          ctx.fillStyle = P.woodB; rr(ctx, pl.x, pl.y, pl.w, pl.h, 2); ctx.fill()
+          // supply crate: slats, corner irons, a hint of a merchant's mark
+          ctx.fillStyle = vgrad(ctx, pl.y, pl.y + pl.h, '#4a2b12', '#26160a')
+          rr(ctx, pl.x, pl.y, pl.w, pl.h, 2); ctx.fill()
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke()
-          ctx.strokeStyle = P.woodHi; ctx.lineWidth = 1.2
-          ctx.beginPath(); ctx.moveTo(pl.x + 3, pl.y + 3); ctx.lineTo(pl.x + pl.w - 3, pl.y + pl.h - 3)
-          ctx.moveTo(pl.x + pl.w - 3, pl.y + 3); ctx.lineTo(pl.x + 3, pl.y + pl.h - 3); ctx.stroke()
+          ctx.strokeStyle = 'rgba(20,12,6,0.9)'; ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(pl.x + 4, pl.y + pl.h * 0.5); ctx.lineTo(pl.x + pl.w - 4, pl.y + pl.h * 0.5)
+          ctx.stroke()
+          ctx.strokeStyle = P.woodHi; ctx.lineWidth = 1.4
+          ctx.globalAlpha = 0.55
+          ctx.beginPath(); ctx.moveTo(pl.x + 4, pl.y + pl.h - 4); ctx.lineTo(pl.x + pl.w - 4, pl.y + 4); ctx.stroke()
+          ctx.globalAlpha = 1
+          ctx.fillStyle = 'rgba(90,60,26,0.8)'
+          ctx.fillRect(pl.x + 2, pl.y + 2, 4, pl.h - 4)
+          ctx.fillRect(pl.x + pl.w - 6, pl.y + 2, 4, pl.h - 4)
         }
       }
 
@@ -846,7 +1107,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         const t = time
         if (ob.kind === 'col') {
           // fluted column with capital and base, rim-lit by fires
-          ctx.fillStyle = P.stoneA
+          ctx.fillStyle = hgrad(ctx, ob.x, ob.x + ob.w, '#100a05', '#33210f')
           ctx.fillRect(ob.x, ob.y, ob.w, ob.h)
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2.4
           ctx.strokeRect(ob.x, ob.y, ob.w, ob.h)
@@ -873,7 +1134,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
           ctx.lineTo(ob.x + ob.w * 0.42, ob.y + ob.h * 0.6)
           ctx.stroke()
         } else if (ob.kind === 'wall') {
-          ctx.fillStyle = P.stoneA
+          ctx.fillStyle = vgrad(ctx, ob.y, ob.y + ob.h, '#241708', '#0e0904')
           ctx.fillRect(ob.x, ob.y, ob.w, ob.h)
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2.2; ctx.strokeRect(ob.x, ob.y, ob.w, ob.h)
           ctx.strokeStyle = P.stoneB; ctx.lineWidth = 1.2
@@ -931,17 +1192,35 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
           ctx.beginPath(); ctx.arc(ob.x + ob.w * 0.55, ob.y + ob.h - 13, 2.4, 0, Math.PI * 2); ctx.fill()
           ctx.globalAlpha = 1
         } else if (ob.kind === 'tent') {
-          ctx.fillStyle = P.woodB
+          // canvas is lit from the fire side, dark on the other
+          ctx.fillStyle = hgrad(ctx, ob.x, ob.x + ob.w, '#2b1a09', '#4a2c10')
           ctx.beginPath()
           ctx.moveTo(ob.x + ob.w / 2, ob.y)
           ctx.lineTo(ob.x, ob.y + ob.h)
           ctx.lineTo(ob.x + ob.w, ob.y + ob.h)
           ctx.closePath(); ctx.fill()
           ctx.strokeStyle = '#000'; ctx.lineWidth = 2.2; ctx.stroke()
-          // stripes
-          ctx.strokeStyle = P.crimson; ctx.lineWidth = 5
-          ctx.beginPath(); ctx.moveTo(ob.x + ob.w / 2, ob.y + 8); ctx.lineTo(ob.x + ob.w * 0.22, ob.y + ob.h); ctx.stroke()
-          ctx.beginPath(); ctx.moveTo(ob.x + ob.w / 2, ob.y + 8); ctx.lineTo(ob.x + ob.w * 0.78, ob.y + ob.h); ctx.stroke()
+          // dyed bands, muted so they read as cloth rather than paint
+          ctx.save()
+          ctx.beginPath()
+          ctx.moveTo(ob.x + ob.w / 2, ob.y)
+          ctx.lineTo(ob.x, ob.y + ob.h)
+          ctx.lineTo(ob.x + ob.w, ob.y + ob.h)
+          ctx.closePath(); ctx.clip()
+          ctx.globalAlpha = 0.5
+          ctx.strokeStyle = '#5e1410'; ctx.lineWidth = 7
+          ctx.beginPath(); ctx.moveTo(ob.x + ob.w / 2, ob.y + 10); ctx.lineTo(ob.x + ob.w * 0.16, ob.y + ob.h); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(ob.x + ob.w / 2, ob.y + 10); ctx.lineTo(ob.x + ob.w * 0.84, ob.y + ob.h); ctx.stroke()
+          ctx.globalAlpha = 0.28
+          ctx.strokeStyle = '#8a6a2a'; ctx.lineWidth = 3
+          ctx.beginPath(); ctx.moveTo(ob.x + ob.w / 2, ob.y + 14); ctx.lineTo(ob.x + ob.w * 0.34, ob.y + ob.h); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(ob.x + ob.w / 2, ob.y + 14); ctx.lineTo(ob.x + ob.w * 0.66, ob.y + ob.h); ctx.stroke()
+          ctx.restore()
+          ctx.globalAlpha = 1
+          // guy ropes
+          ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.lineWidth = 1.2
+          ctx.beginPath(); ctx.moveTo(ob.x + 6, ob.y + ob.h); ctx.lineTo(ob.x - 16, ob.y + ob.h); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(ob.x + ob.w - 6, ob.y + ob.h); ctx.lineTo(ob.x + ob.w + 16, ob.y + ob.h); ctx.stroke()
           // entry
           ctx.fillStyle = '#000'
           ctx.beginPath()
@@ -1153,6 +1432,52 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
           // tail
           ctx.strokeStyle = fl ? '#883830' : P.dogFur; ctx.lineWidth = 3
           ctx.beginPath(); ctx.moveTo(-21, -18); ctx.quadraticCurveTo(-30, -24 + lope * 2, -27, -30); ctx.stroke()
+        } else if (en.kind === 'archer') {
+          const draw = en.state === 'windup' ? Math.min(1, en.t / 620) : 0
+          const sway = Math.sin(en.phase * 0.4) * 1.2
+          // legs
+          ctx.strokeStyle = fl ? '#8a6a48' : P.archerCloak; ctx.lineWidth = 5
+          ctx.beginPath(); ctx.moveTo(-3, -30); ctx.lineTo(-6, 0); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(4, -30); ctx.lineTo(8, 0); ctx.stroke()
+          // hooded body
+          ctx.fillStyle = fl ? '#8a6a48' : P.archerCloak
+          ctx.beginPath()
+          ctx.moveTo(-11, -28)
+          ctx.lineTo(-8, -56 + sway); ctx.lineTo(9, -56 + sway); ctx.lineTo(12, -28)
+          ctx.closePath(); ctx.fill()
+          ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke()
+          // hood
+          ctx.fillStyle = fl ? '#8a6a48' : '#16200f'
+          ctx.beginPath(); ctx.arc(0, -64 + sway, 9.5, 0, Math.PI * 2); ctx.fill()
+          ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.stroke()
+          ctx.fillStyle = 'rgba(0,0,0,0.55)'
+          ctx.beginPath(); ctx.arc(0, -66 + sway, 9.5, Math.PI, 0); ctx.fill()
+          ctx.fillStyle = en.state === 'patrol' ? '#a8a070' : P.enemyEye
+          ctx.beginPath(); ctx.arc(4, -64 + sway, 1.7, 0, Math.PI * 2); ctx.fill()
+          // bow, drawn deeper as the shot charges
+          const bx = 14, by = -48 + sway
+          ctx.strokeStyle = P.woodB; ctx.lineWidth = 3
+          ctx.beginPath(); ctx.arc(bx, by, 20, -1.15, 1.15); ctx.stroke()
+          ctx.strokeStyle = '#c8c0a0'; ctx.lineWidth = 1.2
+          const pull = draw * 11
+          ctx.beginPath()
+          ctx.moveTo(bx + 20 * Math.cos(-1.15), by + 20 * Math.sin(-1.15))
+          ctx.lineTo(bx - pull, by)
+          ctx.lineTo(bx + 20 * Math.cos(1.15), by + 20 * Math.sin(1.15))
+          ctx.stroke()
+          if (draw > 0.05) {
+            ctx.strokeStyle = P.woodB; ctx.lineWidth = 2
+            ctx.beginPath(); ctx.moveTo(bx - pull, by); ctx.lineTo(bx + 22, by); ctx.stroke()
+          }
+          // arms
+          ctx.strokeStyle = fl ? '#8a6a48' : P.archerCloak; ctx.lineWidth = 4
+          ctx.beginPath(); ctx.moveTo(4, -52 + sway); ctx.lineTo(bx, by); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(2, -50 + sway); ctx.lineTo(bx - pull - 2, by + 2); ctx.stroke()
+          // telegraph glint before release
+          if (draw > 0.75) {
+            ctx.fillStyle = `rgba(255,120,60,${(draw - 0.75) * 2.4})`
+            ctx.beginPath(); ctx.arc(bx + 22, by, 3.4, 0, Math.PI * 2); ctx.fill()
+          }
         } else {
           const sw = Math.sin(en.phase) * (Math.abs(en.vx) > 10 ? 1 : 0.15)
           const windup = en.state === 'windup' ? Math.min(1, en.t / 450) : 0
@@ -1190,10 +1515,20 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         // hp pips
         if (en.state !== 'dead' && en.hp < en.maxHp) {
           const w = 30, frac = en.hp / en.maxHp
+          const barY = en.y - (en.kind === 'dog' ? 44 : en.kind === 'archer' ? 80 : 86)
           ctx.fillStyle = 'rgba(0,0,0,0.6)'
-          ctx.fillRect(en.x - w / 2, en.y - (en.kind === 'dog' ? 44 : 86), w, 4)
+          ctx.fillRect(en.x - w / 2, barY, w, 4)
           ctx.fillStyle = '#c03020'
-          ctx.fillRect(en.x - w / 2, en.y - (en.kind === 'dog' ? 44 : 86), w * frac, 4)
+          ctx.fillRect(en.x - w / 2, barY, w * frac, 4)
+        }
+        // windup telegraph — a red tick above whoever is about to swing
+        if (en.state === 'windup') {
+          const tell = en.kind === 'archer' ? 620 : en.kind === 'dog' ? 320 : 450
+          const f = Math.min(1, en.t / tell)
+          ctx.fillStyle = `rgba(255,60,30,${0.35 + f * 0.55})`
+          ctx.beginPath()
+          ctx.arc(en.x, en.y - (en.kind === 'dog' ? 56 : 96), 3 + f * 2.5, 0, Math.PI * 2)
+          ctx.fill()
         }
       }
 
@@ -1378,7 +1713,48 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       // eye
       ctx.fillStyle = '#0a0604'
       ctx.beginPath(); ctx.arc(5, -75 + breathe, 1.6, 0, Math.PI * 2); ctx.fill()
+
+      // raised guard — shield swings across while parrying
+      if (player.parryT > 0 || player.parryFlash > 0) {
+        const gp = player.parryT > 0 ? 1 : player.parryFlash / 240
+        const perfect = player.parryT > PARRY_MS - PARRY_PERFECT_MS
+        ctx.globalAlpha = 0.55 + gp * 0.45
+        ctx.save()
+        ctx.translate(16, -52 + breathe)
+        ctx.rotate(-0.25)
+        ctx.fillStyle = '#3a2a12'
+        ctx.beginPath(); ctx.ellipse(0, 0, 12, 26, 0, 0, Math.PI * 2); ctx.fill()
+        ctx.strokeStyle = perfect ? '#fff4d0' : '#000'
+        ctx.lineWidth = perfect ? 3 : 2.4
+        ctx.stroke()
+        ctx.fillStyle = P.gold
+        ctx.beginPath(); ctx.arc(0, 0, 4.5, 0, Math.PI * 2); ctx.fill()
+        ctx.restore()
+        if (player.parryFlash > 0) {
+          const pf = player.parryFlash / 240
+          ctx.strokeStyle = `rgba(235,230,255,${pf * 0.9})`
+          ctx.lineWidth = 3
+          ctx.beginPath(); ctx.arc(20, -50 + breathe, 26 + (1 - pf) * 22, -1.1, 1.1); ctx.stroke()
+        }
+        ctx.globalAlpha = 1
+      }
       ctx.restore()
+
+      // ── arrows ──
+      for (const pr of projectiles) {
+        if (pr.x < camX - 30 || pr.x > camX + CW + 30) continue
+        const ang = Math.atan2(pr.vy, pr.vx)
+        ctx.save()
+        ctx.translate(pr.x, pr.y)
+        ctx.rotate(ang)
+        ctx.strokeStyle = P.woodB; ctx.lineWidth = 2.4
+        ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(8, 0); ctx.stroke()
+        ctx.fillStyle = P.blade
+        ctx.beginPath(); ctx.moveTo(8, -3); ctx.lineTo(17, 0); ctx.lineTo(8, 3); ctx.closePath(); ctx.fill()
+        ctx.strokeStyle = '#d8d0b8'; ctx.lineWidth = 1.4
+        ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-9, -3.5); ctx.moveTo(-14, 0); ctx.lineTo(-9, 3.5); ctx.stroke()
+        ctx.restore()
+      }
 
       // ── particles ──
       for (const p of particles) {
@@ -1389,7 +1765,105 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       }
       ctx.globalAlpha = 1
 
+      // ── dynamic firelight ──
+      // Additive pass so every fire actually lights the ground, props and
+      // characters standing near it instead of just glowing on its own.
+      ctx.globalCompositeOperation = 'lighter'
+      for (const ob of objs) {
+        if (ob.kind !== 'fire') continue
+        const fx = ob.x + ob.w / 2
+        if (fx < camX - 200 || fx > camX + CW + 200) continue
+        const fy = GROUND_Y - 26
+        const rad = 168 + Math.sin(time * 7 + ob.x) * 9 + Math.sin(time * 17.3 + ob.x) * 4
+        const lg = ctx.createRadialGradient(fx, fy, 4, fx, fy, rad)
+        lg.addColorStop(0, 'rgba(255,150,50,0.30)')
+        lg.addColorStop(0.42, 'rgba(220,90,20,0.13)')
+        lg.addColorStop(1, 'rgba(180,60,10,0)')
+        ctx.fillStyle = lg
+        ctx.fillRect(fx - rad, fy - rad, rad * 2, rad * 2)
+      }
+      ctx.globalCompositeOperation = 'source-over'
+
+      // ── floating damage numbers ──
+      for (const dn of dmgNums) {
+        const a = clamp(dn.life / 0.9, 0, 1)
+        ctx.globalAlpha = a
+        ctx.textAlign = 'center'
+        if (dn.v === 0) {
+          ctx.font = '700 17px Cinzel, Georgia, serif'
+          ctx.fillStyle = '#eae4ff'
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.lineWidth = 3
+          ctx.strokeText('ПАРИРОВАНО', dn.x, dn.y)
+          ctx.fillText('ПАРИРОВАНО', dn.x, dn.y)
+        } else {
+          ctx.font = dn.crit ? '700 24px Cinzel, Georgia, serif' : '700 17px Cinzel, Georgia, serif'
+          ctx.fillStyle = dn.crit ? '#ffd24a' : '#e8d8b8'
+          ctx.strokeStyle = 'rgba(0,0,0,0.85)'; ctx.lineWidth = 3
+          ctx.strokeText(String(dn.v), dn.x, dn.y)
+          ctx.fillText(String(dn.v), dn.x, dn.y)
+        }
+        ctx.textAlign = 'left'
+      }
+      ctx.globalAlpha = 1
+
       ctx.restore() // world space
+
+      // ── foreground debris (parallax 1.28) ──
+      // Kept low along the very bottom edge so it frames the shot without ever
+      // occluding the player or the platforms.
+      {
+        const fgOff = camX * 1.28
+        ctx.fillStyle = P.fgFill
+        ctx.globalAlpha = 0.9
+        const start = Math.floor(fgOff / 430)
+        for (let i = start; i < start + 5; i++) {
+          const sx = i * 430 + prand(i + 61) * 190 - fgOff
+          if (sx < -220 || sx > CW + 80) continue
+          const kind = Math.floor(prand(i + 71) * 3)
+          if (kind === 0) {
+            // rubble mound
+            ctx.beginPath()
+            ctx.moveTo(sx - 60, CH); ctx.quadraticCurveTo(sx, CH - 46, sx + 62, CH)
+            ctx.closePath(); ctx.fill()
+          } else if (kind === 1) {
+            // toppled column drums half-buried in sand
+            for (let d = 0; d < 3; d++) {
+              ctx.beginPath()
+              ctx.ellipse(sx + d * 40, CH - 12 + d * 4, 26, 12, 0.12, 0, Math.PI * 2)
+              ctx.fill()
+            }
+          } else {
+            // ribs of a beached hull
+            ctx.lineWidth = 8
+            ctx.strokeStyle = P.fgFill
+            for (let r = 0; r < 4; r++) {
+              ctx.beginPath()
+              ctx.arc(sx + r * 32, CH + 52, 62, Math.PI * 1.22, Math.PI * 1.58)
+              ctx.stroke()
+            }
+          }
+        }
+        ctx.globalAlpha = 1
+      }
+
+      // ── fog bank in Thrace (cold, unfamiliar shore) ──
+      if (!isDuel && location === 'thrace') {
+        for (let i = 0; i < 3; i++) {
+          const fy = 330 + i * 52
+          const off = ((time * (7 + i * 4) - camX * (0.24 + i * 0.06)) % (CW + 420)) - 210
+          const fgrad = ctx.createLinearGradient(0, fy - 40, 0, fy + 40)
+          fgrad.addColorStop(0, 'rgba(150,165,180,0)')
+          fgrad.addColorStop(0.5, `rgba(150,165,180,${0.11 - i * 0.02})`)
+          fgrad.addColorStop(1, 'rgba(150,165,180,0)')
+          ctx.fillStyle = fgrad
+          ctx.beginPath()
+          ctx.ellipse(off, fy, 340, 34, 0, 0, Math.PI * 2)
+          ctx.fill()
+          ctx.beginPath()
+          ctx.ellipse(off - CW - 420, fy, 340, 34, 0, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
 
       // ── prompt ──
       if (prompt && !dialogue) {
@@ -1452,6 +1926,50 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         ctx.textAlign = 'left'
       }
 
+      // ── combo counter ──
+      if (player.combo > 1 && player.comboT > 0) {
+        const ca = clamp(player.comboT / COMBO_WINDOW_MS, 0, 1)
+        ctx.globalAlpha = 0.35 + ca * 0.65
+        ctx.textAlign = 'center'
+        ctx.font = '700 30px Cinzel, Georgia, serif'
+        ctx.fillStyle = player.combo >= 3 ? '#ffd24a' : '#e0b860'
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 4
+        const cx2 = CW - 78
+        ctx.strokeText(`×${player.combo}`, cx2, 92)
+        ctx.fillText(`×${player.combo}`, cx2, 92)
+        // window timer ring
+        ctx.strokeStyle = `rgba(200,148,26,${ca})`
+        ctx.lineWidth = 2.5
+        ctx.beginPath(); ctx.arc(cx2, 82, 26, -Math.PI / 2, -Math.PI / 2 + ca * Math.PI * 2); ctx.stroke()
+        ctx.textAlign = 'left'
+        ctx.globalAlpha = 1
+      }
+
+      // ── ability cooldown pips ──
+      {
+        const pips: [string, number, number][] = [
+          ['Рывок', player.dashCd, DASH_CD_MS],
+          ['Щит',   player.parryCd, PARRY_CD_MS],
+        ]
+        pips.forEach(([label, cd, max], i) => {
+          const px = CW - 150 + i * 68, py = CH - 40
+          const ready = cd <= 0
+          ctx.fillStyle = ready ? 'rgba(200,148,26,0.22)' : 'rgba(0,0,0,0.5)'
+          rr(ctx, px, py, 56, 22, 4); ctx.fill()
+          ctx.strokeStyle = ready ? P.uiBorder : 'rgba(138,104,48,0.5)'
+          ctx.lineWidth = 1.2; ctx.stroke()
+          if (!ready) {
+            ctx.fillStyle = 'rgba(200,148,26,0.25)'
+            ctx.fillRect(px + 1, py + 1, 54 * (1 - cd / max), 20)
+          }
+          ctx.fillStyle = ready ? P.uiText : P.uiDim
+          ctx.font = '600 11px Georgia, serif'
+          ctx.textAlign = 'center'
+          ctx.fillText(label, px + 28, py + 15)
+          ctx.textAlign = 'left'
+        })
+      }
+
       // ── location title + controls hint ──
       if (!isDuel) {
         ctx.fillStyle = P.uiDim
@@ -1460,12 +1978,12 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         if (!isTouch) {
           ctx.fillStyle = 'rgba(138,104,48,0.7)'
           ctx.font = '11px Georgia, serif'
-          ctx.fillText('A/D — ход · W — прыжок · Shift — рывок · J — удар · E — действие · Esc — корабль', 14, CH - 32)
+          ctx.fillText('A/D — ход · W — прыжок · Shift — рывок · J — удар (серия ×3) · K — щит · E — действие · M — звук · Esc — корабль', 14, CH - 32)
         }
       } else if (!isTouch) {
         ctx.fillStyle = 'rgba(138,104,48,0.8)'
         ctx.font = '11px Georgia, serif'
-        ctx.fillText('J — удар · Shift — рывок сквозь атаки · W — прыжок через волну', 14, CH - 14)
+        ctx.fillText('J — серия из трёх ударов · K — щит (точный блок оглушает) · Shift — рывок сквозь копьё · W — через волну', 14, CH - 14)
       }
 
       // hit flash
@@ -1488,12 +2006,13 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       cancelAnimationFrame(raf)
       window.removeEventListener('keydown', kd)
       window.removeEventListener('keyup', ku)
+      sfx.stopAmbient()
     }
   }, [mode, isTouch])
 
   // ── touch controls (v1.4) ──
   const bindTouch = (key: keyof typeof keysRef.current) => ({
-    onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); keysRef.current[key] = true },
+    onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); sfx.unlock(); keysRef.current[key] = true },
     onPointerUp: (e: React.PointerEvent) => { e.preventDefault(); keysRef.current[key] = false },
     onPointerLeave: () => { keysRef.current[key] = false },
     onPointerCancel: () => { keysRef.current[key] = false },
@@ -1519,6 +2038,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
           </div>
           <div style={{ position: 'absolute', right: 12, bottom: 12, display: 'flex', gap: 10, alignItems: 'flex-end' }}>
             <div style={{ ...tBtn, width: 48, height: 48, fontSize: 16 }} {...bindTouch('dash')}>⚡</div>
+            <div style={{ ...tBtn, width: 48, height: 48, fontSize: 18 }} {...bindTouch('parry')}>🛡</div>
             <div style={tBtn} {...bindTouch('attack')}>⚔</div>
             <div style={tBtn} {...bindTouch('jump')}>⤒</div>
             <div style={{ ...tBtn, width: 48, height: 48, fontSize: 16 }} {...bindTouch('action')}>E</div>
