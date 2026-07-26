@@ -57,7 +57,7 @@ interface Player {
   atkT: number; atkCd: number; invuln: number; flash: number
   combo: number; comboT: number
   parryT: number; parryCd: number; parryFlash: number
-  stepT: number
+  stepT: number; air: boolean
 }
 interface Enemy {
   id: string; kind: 'marauder' | 'dog' | 'archer'
@@ -74,6 +74,19 @@ interface Hector {
   state: 'enter' | 'approach' | 'tellLunge' | 'lunge' | 'tellSlam' | 'slam' | 'stagger' | 'dying'
   t: number; phase: number; flash: number
   waveX: number; waveActive: boolean; waveDir: Facing
+}
+/**
+ * Poseidon's Messenger — a drowned man worn as a glove by the sea.
+ * Fights at range and denies ground, where Hector closes and commits.
+ */
+interface Messenger {
+  x: number; y: number; facing: Facing
+  hp: number; maxHp: number
+  state: 'rise' | 'drift' | 'tellSpout' | 'spout' | 'tellSurge' | 'surge' | 'grab' | 'stagger' | 'dying'
+  t: number; phase: number; flash: number
+  spouts: { x: number; t: number }[]
+  surgeX: number; surgeActive: boolean; surgeDir: Facing
+  tide: number
 }
 interface Particle {
   x: number; y: number; vx: number; vy: number
@@ -201,6 +214,19 @@ const OBJS_DUEL: LevelObj[] = [
   { id: 'dcol2', x: 1356, y: GROUND_Y - 250, w: 54, h: 250, kind: 'col',  label: '' },
   { id: 'dfire1',x: 250,  y: GROUND_Y - 78,  w: 28, h: 78,  kind: 'fire', label: '' },
   { id: 'dfire2',x: 1222, y: GROUND_Y - 78,  w: 28, h: 78,  kind: 'fire', label: '' },
+]
+
+// Messenger arena: a tidal flat. Higher ground matters because the surge
+// sweeps everything standing on the sand.
+const PLATS_DUEL2: Platform[] = [
+  { x: 150,  y: 372, w: 130, h: 30, kind: 'stone' },
+  { x: 470,  y: 344, w: 110, h: 26, kind: 'stone' },
+  { x: 900,  y: 344, w: 110, h: 26, kind: 'stone' },
+  { x: 1220, y: 372, w: 130, h: 30, kind: 'stone' },
+]
+const OBJS_DUEL2: LevelObj[] = [
+  { id: 'wcol1', x: 60,   y: GROUND_Y - 210, w: 48, h: 210, kind: 'col', label: '' },
+  { id: 'wcol2', x: 1392, y: GROUND_Y - 210, w: 48, h: 210, kind: 'col', label: '' },
 ]
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -350,7 +376,7 @@ function makeRuinsLayer(): HTMLCanvasElement {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 interface Props {
-  mode: 'explore' | 'duel'
+  mode: 'explore' | 'duel' | 'duel2'
   onExit: () => void
   onTriggerEvent: (id: string) => void
   onDuelEnd: (won: boolean) => void
@@ -378,7 +404,9 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const keys = keysRef.current
-    const isDuel = mode === 'duel'
+    const isHectorDuel = mode === 'duel'
+    const isSeaDuel = mode === 'duel2'
+    const isDuel = isHectorDuel || isSeaDuel
 
     // ── State (all local to the loop — no React re-renders) ──
     const runNum = useGameStore.getState().runNumber
@@ -398,7 +426,7 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       atkT: 0, atkCd: 0, invuln: 0, flash: 0,
       combo: 0, comboT: 0,
       parryT: 0, parryCd: 0, parryFlash: 0,
-      stepT: 0,
+      stepT: 0, air: false,
     }
     const spawnEnemies = (loc: LocKey): Enemy[] =>
       LOCATIONS[loc].enemies
@@ -408,16 +436,22 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       LOCATIONS[loc].pickups.filter(p => !persist.got.has(p.id)).map(p => ({ ...p }))
 
     let location: LocKey = startLoc
-    let plats: Platform[] = isDuel ? PLATS_DUEL : [...LOCATIONS[startLoc].plats]
-    let objs: LevelObj[] = isDuel ? OBJS_DUEL : LOCATIONS[startLoc].objs
+    let plats: Platform[] = isSeaDuel ? PLATS_DUEL2 : isHectorDuel ? PLATS_DUEL : [...LOCATIONS[startLoc].plats]
+    let objs: LevelObj[] = isSeaDuel ? OBJS_DUEL2 : isHectorDuel ? OBJS_DUEL : LOCATIONS[startLoc].objs
     let pickups: Pickup[] = isDuel ? [] : spawnPickups(startLoc)
     let enemies: Enemy[] = isDuel ? [] : spawnEnemies(startLoc)
     let levelW = isDuel ? DUEL_W : LOCATIONS[startLoc].width
 
-    const hector: Hector | null = isDuel ? {
+    const hector: Hector | null = isHectorDuel ? {
       x: 1050, y: GROUND_Y, vx: 0, vy: 0, facing: -1,
       hp: 300, maxHp: 300, state: 'enter', t: 0, phase: 0, flash: 0,
       waveX: 0, waveActive: false, waveDir: -1,
+    } : null
+
+    const messenger: Messenger | null = isSeaDuel ? {
+      x: 1080, y: GROUND_Y, facing: -1,
+      hp: 340, maxHp: 340, state: 'rise', t: 0, phase: 0, flash: 0,
+      spouts: [], surgeX: 0, surgeActive: false, surgeDir: -1, tide: 0,
     } : null
 
     const particles: Particle[] = []
@@ -591,17 +625,25 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       player.comboT = Math.max(0, player.comboT - dt * 1000)
       if (player.comboT <= 0 && player.atkT <= 0) player.combo = 0
       if (keys.attack && player.atkCd <= 0 && player.parryT <= 0) {
-        const step = player.combo % 3
-        const heavy = step === 2
+        // Airborne swing is a committed downward strike: more damage, and it
+        // drives Odysseus down so the blow lands with his weight behind it.
+        const air = !player.onGround
+        player.air = air
+        const step = air ? 0 : player.combo % 3
+        const heavy = !air && step === 2
         player.atkT = heavy ? ATK_MS + 90 : ATK_MS
         player.atkCd = heavy ? ATK_CD_MS + 220 : ATK_CD_MS
-        player.combo = step + 1
-        player.comboT = COMBO_WINDOW_MS
-        const dmg = COMBO_DMG[step]
+        player.combo = air ? 0 : step + 1
+        player.comboT = air ? 0 : COMBO_WINDOW_MS
+        const dmg = air ? 40 : COMBO_DMG[step]
         const reach = heavy ? ATK_RANGE + 16 : ATK_RANGE
-        sfx.swing(step)
-        // heavy swing lunges forward slightly
-        if (heavy && player.onGround) player.x += player.facing * 14
+        sfx.swing(air ? 2 : step)
+        if (air) {
+          player.vy = Math.max(player.vy, 420)
+          player.x += player.facing * 8
+        } else if (heavy) {
+          player.x += player.facing * 14
+        }
         const hx = player.x + player.facing * reach * 0.6
         let connected = false
         for (const en of enemies) {
@@ -635,6 +677,25 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
             shake = Math.max(shake, heavy ? 9 : 5)
             if (hector.hp <= 0) {
               hector.state = 'dying'; hector.t = 0
+              shake = 16
+              hitStop = HITSTOP_HEAVY * 2
+              sfx.bossRoar()
+            }
+          }
+        }
+        if (messenger && messenger.state !== 'dying' && messenger.state !== 'rise') {
+          if (Math.abs(messenger.x - hx) < reach + 22 && Math.abs(messenger.y - player.y) < 96) {
+            connected = true
+            const mdmg = heavy ? 42 : 25
+            messenger.hp -= mdmg
+            messenger.flash = 110
+            dmgNums.push({ x: messenger.x, y: messenger.y - 108, v: mdmg, life: 0.8, crit: heavy })
+            burst(messenger.x, messenger.y - 56, heavy ? 16 : 10, 150, 205, 230, heavy ? 280 : 180)
+            shake = Math.max(shake, heavy ? 9 : 5)
+            if (messenger.hp <= 0) {
+              messenger.state = 'dying'; messenger.t = 0
+              messenger.surgeActive = false
+              messenger.spouts = []
               shake = 16
               hitStop = HITSTOP_HEAVY * 2
               sfx.bossRoar()
@@ -881,6 +942,111 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         hector.x = clamp(hector.x, 60, DUEL_W - 60)
       }
 
+      // ── Messenger AI (sea duel) ──
+      if (messenger && !duelEnded) {
+        const M = messenger
+        M.flash = Math.max(0, M.flash - dt * 1000)
+        M.phase += dt * 2.2
+        M.t += dt
+        M.tide = 10 + Math.sin(time * 0.55) * 8
+        const mdx = player.x - M.x
+        if (M.state !== 'dying') M.facing = mdx > 0 ? 1 : -1
+
+        switch (M.state) {
+          case 'rise':
+            if (M.t > 1.6) { M.state = 'drift'; M.t = 0 }
+            break
+          case 'drift': {
+            // glides over the flat, never quite closing
+            const want = player.x - M.facing * 250
+            M.x += clamp(want - M.x, -110 * dt * 6, 110 * dt * 6) * dt * 2.4
+            if (M.t > 1.5) {
+              const r = Math.random()
+              M.state = Math.abs(mdx) < 150 ? 'grab' : r < 0.5 ? 'tellSpout' : 'tellSurge'
+              M.t = 0
+            }
+            break
+          }
+          case 'tellSpout':
+            if (M.t > 0.62) {
+              // three columns walk toward wherever the player stood
+              M.state = 'spout'; M.t = 0
+              const base = player.x
+              M.spouts = [
+                { x: base, t: 0 },
+                { x: base + (mdx > 0 ? 130 : -130), t: -0.28 },
+                { x: base + (mdx > 0 ? 260 : -260), t: -0.56 },
+              ]
+              sfx.slam()
+            }
+            break
+          case 'spout':
+            if (M.t > 1.5) { M.state = 'drift'; M.t = 0 }
+            break
+          case 'tellSurge':
+            if (M.t > 0.75) {
+              M.state = 'surge'; M.t = 0
+              M.surgeActive = true
+              M.surgeDir = mdx > 0 ? 1 : -1
+              M.surgeX = M.x
+              shake = 10
+              sfx.slam()
+            }
+            break
+          case 'surge':
+            if (M.t > 1.5) { M.state = 'drift'; M.t = 0 }
+            break
+          case 'grab':
+            if (M.t < 0.34) {
+              M.x += M.facing * 340 * dt
+              if (Math.abs(player.x - M.x) < 50 && Math.abs(player.y - M.y) < 84) hurtPlayer(16, M.x)
+            } else if (M.t > 0.9) { M.state = 'stagger'; M.t = 0 }
+            break
+          case 'stagger':
+            if (M.t > 0.8) { M.state = 'drift'; M.t = 0 }
+            break
+          case 'dying':
+            if (M.t > 1.8) { duelEnded = true; cbRef.current.onDuelEnd(true) }
+            break
+        }
+
+        // water columns erupting from the sand
+        for (const sp of M.spouts) {
+          sp.t += dt
+          if (sp.t > 0.34 && sp.t < 0.62 &&
+              Math.abs(player.x - sp.x) < 30 && player.y > GROUND_Y - 130) {
+            hurtPlayer(14, sp.x)
+          }
+          if (sp.t > 0.2 && sp.t < 0.7 && Math.random() < 0.7) {
+            addP({
+              x: sp.x + (Math.random() - 0.5) * 26, y: GROUND_Y,
+              vx: (Math.random() - 0.5) * 90, vy: -280 - Math.random() * 190,
+              life: 0.6, max: 0.6, size: 2 + Math.random() * 2.5,
+              r: 130, g: 190, b: 220, grav: 520,
+            })
+          }
+        }
+        M.spouts = M.spouts.filter(sp => sp.t < 1.1)
+
+        // the surge: a wall of water at ankle height — get off the sand
+        if (M.surgeActive) {
+          M.surgeX += M.surgeDir * 400 * dt
+          for (let i = 0; i < 2; i++) {
+            addP({
+              x: M.surgeX + (Math.random() - 0.5) * 30, y: GROUND_Y - Math.random() * 40,
+              vx: M.surgeDir * 70, vy: -110 - Math.random() * 90,
+              life: 0.45, max: 0.45, size: 2 + Math.random() * 2,
+              r: 150, g: 200, b: 225, grav: 420,
+            })
+          }
+          if (Math.abs(player.x - M.surgeX) < 34 && player.y > GROUND_Y - 40) {
+            hurtPlayer(13, M.surgeX - M.surgeDir * 10)
+          }
+          if (M.surgeX < -40 || M.surgeX > DUEL_W + 40) M.surgeActive = false
+        }
+        M.x = clamp(M.x, 70, DUEL_W - 70)
+      }
+
       // ── Pickups ──
       for (const pk of pickups) {
         if (pk.got) continue
@@ -1057,6 +1223,35 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       ctx.globalAlpha = 0.45
       ctx.beginPath(); ctx.moveTo(0, GROUND_Y + 0.5); ctx.lineTo(CW, GROUND_Y + 0.5); ctx.stroke()
       ctx.globalAlpha = 1
+
+      // Messenger arena is a tidal flat: standing water sheeting over the sand,
+      // rising and falling with the boss's own breathing tide.
+      if (messenger) {
+        const t2 = messenger.tide
+        const wetGrad = ctx.createLinearGradient(0, GROUND_Y, 0, CH)
+        wetGrad.addColorStop(0, `rgba(30,80,115,${0.5 + t2 * 0.012})`)
+        wetGrad.addColorStop(0.45, 'rgba(14,42,64,0.4)')
+        wetGrad.addColorStop(1, 'rgba(6,20,32,0.16)')
+        ctx.fillStyle = wetGrad
+        ctx.fillRect(0, GROUND_Y, CW, CH - GROUND_Y)
+        // sky reflected in the sheet of water
+        ctx.globalAlpha = 0.16
+        ctx.fillStyle = '#5a3a70'
+        ctx.fillRect(0, GROUND_Y, CW, 16)
+        ctx.globalAlpha = 1
+        // ripple lines drifting shoreward
+        ctx.strokeStyle = 'rgba(150,205,235,0.2)'
+        ctx.lineWidth = 1.2
+        for (let i = 0; i < 4; i++) {
+          const ry = GROUND_Y + 12 + i * 22
+          ctx.beginPath()
+          for (let x = 0; x <= CW; x += 26) {
+            const yy = ry + Math.sin(x * 0.022 + time * (0.9 + i * 0.25) + i) * 2.4
+            if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy)
+          }
+          ctx.stroke()
+        }
+      }
 
       ctx.save()
       ctx.translate(-camX, 0)
@@ -1603,6 +1798,165 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
         // boss HP bar (screen space, drawn after restore below)
       }
 
+      // ── Messenger ──
+      if (messenger) {
+        const M = messenger
+        // telegraph markers on the sand where the columns will burst
+        for (const sp of M.spouts) {
+          if (sp.t < 0.34 && sp.t > -0.6) {
+            const warn = clamp((sp.t + 0.6) / 0.94, 0, 1)
+            ctx.strokeStyle = `rgba(120,200,235,${0.3 + warn * 0.6})`
+            ctx.lineWidth = 2.5
+            ctx.beginPath(); ctx.ellipse(sp.x, GROUND_Y, 26 * warn, 8 * warn, 0, 0, Math.PI * 2); ctx.stroke()
+          }
+          if (sp.t >= 0.28 && sp.t < 0.85) {
+            const up = clamp((sp.t - 0.28) / 0.2, 0, 1)
+            const fade = clamp(1 - (sp.t - 0.5) / 0.35, 0, 1)
+            const h = 150 * up
+            const wg = ctx.createLinearGradient(0, GROUND_Y - h, 0, GROUND_Y)
+            wg.addColorStop(0, `rgba(215,240,250,${0.85 * fade})`)
+            wg.addColorStop(0.5, `rgba(110,180,215,${0.7 * fade})`)
+            wg.addColorStop(1, `rgba(40,90,130,${0.5 * fade})`)
+            ctx.fillStyle = wg
+            ctx.beginPath()
+            ctx.moveTo(sp.x - 17, GROUND_Y)
+            ctx.quadraticCurveTo(sp.x - 12, GROUND_Y - h * 0.6, sp.x - 5, GROUND_Y - h)
+            ctx.lineTo(sp.x + 5, GROUND_Y - h)
+            ctx.quadraticCurveTo(sp.x + 12, GROUND_Y - h * 0.6, sp.x + 17, GROUND_Y)
+            ctx.closePath(); ctx.fill()
+          }
+        }
+        // the surge front
+        if (M.surgeActive) {
+          const sg = ctx.createLinearGradient(0, GROUND_Y - 46, 0, GROUND_Y)
+          sg.addColorStop(0, 'rgba(220,245,255,0.75)')
+          sg.addColorStop(1, 'rgba(35,90,130,0.6)')
+          ctx.fillStyle = sg
+          ctx.beginPath()
+          ctx.moveTo(M.surgeX - M.surgeDir * 90, GROUND_Y)
+          ctx.quadraticCurveTo(M.surgeX - M.surgeDir * 26, GROUND_Y - 48, M.surgeX, GROUND_Y - 40)
+          ctx.quadraticCurveTo(M.surgeX + M.surgeDir * 12, GROUND_Y - 16, M.surgeX + M.surgeDir * 18, GROUND_Y)
+          ctx.closePath(); ctx.fill()
+          ctx.strokeStyle = 'rgba(235,250,255,0.85)'; ctx.lineWidth = 2
+          ctx.beginPath()
+          ctx.moveTo(M.surgeX - M.surgeDir * 90, GROUND_Y - 3)
+          ctx.quadraticCurveTo(M.surgeX - M.surgeDir * 26, GROUND_Y - 50, M.surgeX, GROUND_Y - 40)
+          ctx.stroke()
+        }
+
+        ctx.save()
+        ctx.translate(M.x, M.y)
+        if (M.state === 'dying') ctx.globalAlpha = Math.max(0, 1 - M.t / 1.7)
+        if (M.state === 'rise') ctx.globalAlpha = Math.min(1, M.t / 1.4)
+        ctx.scale(M.facing, 1)
+        const mfl = M.flash > 0
+        const tellM = M.state === 'tellSpout' || M.state === 'tellSurge'
+        const risen = M.state === 'rise' ? Math.min(1, M.t / 1.4) : 1
+        ctx.translate(0, (1 - risen) * 90)
+        const sway = Math.sin(M.phase) * 4
+
+        // cold aura off the body
+        const maur = ctx.createRadialGradient(0, -58, 8, 0, -58, 92)
+        maur.addColorStop(0, `rgba(90,190,220,${tellM ? 0.32 : 0.15})`)
+        maur.addColorStop(1, 'rgba(60,140,190,0)')
+        ctx.fillStyle = maur
+        ctx.fillRect(-92, -150, 184, 160)
+
+        // No legs — the sea carries it, narrowing to a wrung column at the waist
+        // and flaring where it meets the sand.
+        const bodyGrad = vgrad(ctx, -110, 6, mfl ? '#7ec4d8' : '#0f3348', '#030d16')
+        ctx.fillStyle = bodyGrad
+        ctx.beginPath()
+        ctx.moveTo(-13, -88)
+        ctx.quadraticCurveTo(-8 + sway * 0.5, -58, -11 + sway, -30)
+        ctx.quadraticCurveTo(-22 + sway * 1.7, -12, -30 + sway * 2, 4)
+        ctx.lineTo(30 + sway * 2, 4)
+        ctx.quadraticCurveTo(22 + sway * 1.7, -12, 11 + sway, -30)
+        ctx.quadraticCurveTo(8 + sway * 0.5, -58, 13, -88)
+        ctx.closePath(); ctx.fill()
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)'; ctx.lineWidth = 2.4; ctx.stroke()
+        // water sheeting down the column
+        ctx.strokeStyle = 'rgba(170,225,245,0.28)'; ctx.lineWidth = 1.4
+        for (let i = -1; i <= 1; i++) {
+          ctx.beginPath()
+          ctx.moveTo(i * 7, -84)
+          ctx.quadraticCurveTo(i * 5 + sway, -46, i * 13 + sway * 1.8, 2)
+          ctx.stroke()
+        }
+
+        // drowned torso — shoulders wider than the waist below it
+        ctx.fillStyle = bodyGrad
+        ctx.beginPath()
+        ctx.moveTo(-21, -102)
+        ctx.quadraticCurveTo(-24, -96, -20, -84)
+        ctx.lineTo(-13, -66); ctx.lineTo(13, -66); ctx.lineTo(20, -84)
+        ctx.quadraticCurveTo(24, -96, 21, -102)
+        ctx.closePath(); ctx.fill()
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 2.8; ctx.stroke()
+        // ribs showing through swollen flesh
+        ctx.strokeStyle = 'rgba(180,225,240,0.3)'; ctx.lineWidth = 1.3
+        for (let i = 0; i < 3; i++) {
+          const w = 15 - i * 2.5
+          ctx.beginPath()
+          ctx.moveTo(-w, -96 + i * 9); ctx.lineTo(w, -96 + i * 9)
+          ctx.stroke()
+        }
+        // wet rim light down the seaward edge
+        ctx.strokeStyle = 'rgba(200,245,255,0.45)'; ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(-20, -100); ctx.quadraticCurveTo(-23, -84, -13, -66)
+        ctx.stroke()
+        // arms — long, waterlogged, trailing weed
+        const armAng = M.state === 'grab' ? 0.5 : tellM ? -1.5 : -0.35 + Math.sin(M.phase * 1.3) * 0.15
+        ctx.save()
+        ctx.translate(14, -96)
+        ctx.rotate(armAng)
+        ctx.strokeStyle = mfl ? '#8ecfe0' : '#17415a'; ctx.lineWidth = 8
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(48, 12); ctx.stroke()
+        ctx.strokeStyle = '#22503a'; ctx.lineWidth = 2
+        ctx.beginPath(); ctx.moveTo(30, 8); ctx.quadraticCurveTo(38, 26, 30, 40); ctx.stroke()
+        ctx.beginPath(); ctx.moveTo(44, 12); ctx.quadraticCurveTo(52, 30, 44, 44); ctx.stroke()
+        ctx.restore()
+        ctx.save()
+        ctx.translate(-14, -96)
+        ctx.rotate(-armAng * 0.6)
+        ctx.strokeStyle = mfl ? '#8ecfe0' : '#17415a'; ctx.lineWidth = 7
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-40, 16); ctx.stroke()
+        ctx.restore()
+
+        // head: a drowned man's, eyes lit from inside
+        ctx.fillStyle = mfl ? '#a8dcea' : '#1c4b64'
+        ctx.beginPath(); ctx.arc(0, -118, 14, 0, Math.PI * 2); ctx.fill()
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 2.6; ctx.stroke()
+        // hair of kelp
+        ctx.strokeStyle = '#1e4a34'; ctx.lineWidth = 2.6
+        for (let i = 0; i < 5; i++) {
+          const a = -2.5 + i * 0.42
+          ctx.beginPath()
+          ctx.moveTo(Math.cos(a) * 12, -118 + Math.sin(a) * 12)
+          ctx.quadraticCurveTo(
+            Math.cos(a) * 26 + sway, -112 + Math.sin(a) * 22,
+            Math.cos(a) * 24 + sway * 1.8, -94 + Math.sin(a) * 30
+          )
+          ctx.stroke()
+        }
+        // eyes
+        const eyeGlow = tellM ? 1 : 0.6
+        ctx.fillStyle = `rgba(180,255,255,${eyeGlow})`
+        ctx.beginPath(); ctx.arc(5, -120, 3, 0, Math.PI * 2); ctx.fill()
+        ctx.beginPath(); ctx.arc(-5, -120, 2.4, 0, Math.PI * 2); ctx.fill()
+        // water constantly falling off it
+        if (Math.random() < 0.5) {
+          addP({
+            x: M.x + (Math.random() - 0.5) * 42, y: M.y - 100 + Math.random() * 60,
+            vx: (Math.random() - 0.5) * 20, vy: 60 + Math.random() * 90,
+            life: 0.5, max: 0.5, size: 1.4 + Math.random() * 1.4,
+            r: 140, g: 200, b: 225, grav: 300,
+          })
+        }
+        ctx.restore()
+      }
+
       // ── player ──
       ctx.save()
       ctx.translate(player.x, player.y)
@@ -1909,21 +2263,29 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       }
 
       // ── boss HP bar ──
-      if (hector && hector.state !== 'enter') {
-        const bw = 420, bx = (CW - bw) / 2
-        ctx.fillStyle = 'rgba(0,0,0,0.65)'
-        rr(ctx, bx - 4, 18, bw + 8, 22, 5); ctx.fill()
-        ctx.strokeStyle = P.uiBorder; ctx.lineWidth = 1.4; ctx.stroke()
-        const frac = clamp(hector.hp / hector.maxHp, 0, 1)
-        const hg = ctx.createLinearGradient(bx, 0, bx + bw * frac, 0)
-        hg.addColorStop(0, '#7a1410'); hg.addColorStop(1, '#d83018')
-        ctx.fillStyle = hg
-        ctx.fillRect(bx, 22, bw * frac, 14)
-        ctx.fillStyle = P.uiText
-        ctx.font = '700 12px Georgia, serif'
-        ctx.textAlign = 'center'
-        ctx.fillText('ТЕНЬ ГЕКТОРА', CW / 2, 33)
-        ctx.textAlign = 'left'
+      {
+        const boss =
+          hector && hector.state !== 'enter'
+            ? { hp: hector.hp, max: hector.maxHp, name: 'ТЕНЬ ГЕКТОРА', c0: '#7a1410', c1: '#d83018' }
+            : messenger && messenger.state !== 'rise'
+              ? { hp: messenger.hp, max: messenger.maxHp, name: 'ПОСЛАННИК ПОСЕЙДОНА', c0: '#0d3a52', c1: '#3aa8c8' }
+              : null
+        if (boss) {
+          const bw = 420, bx = (CW - bw) / 2
+          ctx.fillStyle = 'rgba(0,0,0,0.65)'
+          rr(ctx, bx - 4, 18, bw + 8, 22, 5); ctx.fill()
+          ctx.strokeStyle = P.uiBorder; ctx.lineWidth = 1.4; ctx.stroke()
+          const frac = clamp(boss.hp / boss.max, 0, 1)
+          const hg = ctx.createLinearGradient(bx, 0, bx + Math.max(1, bw * frac), 0)
+          hg.addColorStop(0, boss.c0); hg.addColorStop(1, boss.c1)
+          ctx.fillStyle = hg
+          ctx.fillRect(bx, 22, bw * frac, 14)
+          ctx.fillStyle = P.uiText
+          ctx.font = '700 12px Georgia, serif'
+          ctx.textAlign = 'center'
+          ctx.fillText(boss.name, CW / 2, 33)
+          ctx.textAlign = 'left'
+        }
       }
 
       // ── combo counter ──
@@ -1983,7 +2345,12 @@ export function GameCanvas({ mode, onExit, onTriggerEvent, onDuelEnd }: Props) {
       } else if (!isTouch) {
         ctx.fillStyle = 'rgba(138,104,48,0.8)'
         ctx.font = '11px Georgia, serif'
-        ctx.fillText('J — серия из трёх ударов · K — щит (точный блок оглушает) · Shift — рывок сквозь копьё · W — через волну', 14, CH - 14)
+        ctx.fillText(
+          isSeaDuel
+            ? 'J — серия ударов, в прыжке — удар сверху · K — щит · Вал сметает песок: запрыгни на камни · Столбы бьют вверх — уходи вбок'
+            : 'J — серия из трёх ударов · K — щит (точный блок оглушает) · Shift — рывок сквозь копьё · W — через волну',
+          14, CH - 14
+        )
       }
 
       // hit flash

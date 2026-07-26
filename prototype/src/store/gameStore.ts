@@ -263,20 +263,42 @@ export const useGameStore = create<GameState>((set, get) => ({
     if (hp <= 0) set({ phase: 'death', log: [...state.log, { text: 'Одиссей пал на берегу Трои.', type: 'combat' }] })
   },
 
+  /** Resolves whichever canvas fight is currently running. */
   endDuel: (won) => {
     const state = get()
-    if (won) {
+    const isMessenger = state.phase === 'duel2'
+    if (!won) {
       set({
-        phase: 'boss',
-        activeBoss: shadowOfHector,
-        activeBossPhase: shadowOfHector.phases[1],
-        bossPhase: 1,
-        choiceResult: null,
-        log: [...state.log, { text: 'Тень Гектора повержена в бою. Она ждёт твоего слова.', type: 'combat' }],
+        phase: 'death',
+        log: [...state.log, {
+          text: isMessenger ? 'Море сомкнулось над тобой.' : 'Тень Гектора оказалась сильнее.',
+          type: 'combat',
+        }],
       })
-    } else {
-      set({ phase: 'death', log: [...state.log, { text: 'Тень Гектора оказалась сильнее.', type: 'combat' }] })
+      return
     }
+    if (isMessenger) {
+      // The sea does not forgive, but it withdraws when it has taken enough.
+      set({
+        phase: 'finale',
+        bossDefeated: true,
+        activeBoss: null,
+        activeBossPhase: null,
+        choiceResult: null,
+        poseidonWrath: Math.min(100, state.poseidonWrath + 10),
+        odysseus: { ...state.odysseus, glory: Math.min(100, state.odysseus.glory + 15) },
+        log: [...state.log, { text: 'Посланник рассыпался пеной. Посейдон запомнил и это.', type: 'divine' }],
+      })
+      return
+    }
+    set({
+      phase: 'boss',
+      activeBoss: shadowOfHector,
+      activeBossPhase: shadowOfHector.phases[1],
+      bossPhase: 1,
+      choiceResult: null,
+      log: [...state.log, { text: 'Тень Гектора повержена в бою. Она ждёт твоего слова.', type: 'combat' }],
+    })
   },
 
   goToShip: () => set({ phase: 'ship', activeEvent: null, choiceResult: null }),
@@ -356,6 +378,15 @@ export const useGameStore = create<GameState>((set, get) => ({
 
   makeBossChoice: (choice: Choice) => {
     const state = get()
+    // Meeting the Messenger head-on is fought on the shore, not resolved in text.
+    if (state.activeBoss?.id === 'poseidon_messenger' && choice.id === 'fight_force') {
+      set({
+        phase: 'duel2',
+        choiceResult: null,
+        log: [...state.log, { text: 'Ты пошёл навстречу волне.', type: 'combat' }],
+      })
+      return
+    }
     const updates = applyEffectsToState(state, choice)
     set({ ...updates, phase: 'boss_result' })
     if (get().odysseus.hp <= 0) {

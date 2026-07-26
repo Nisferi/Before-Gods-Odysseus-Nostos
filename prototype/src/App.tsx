@@ -24,12 +24,12 @@ export default function App() {
 
   if (phase === 'menu') return <MainMenu />
 
-  if (phase === 'exploration' || phase === 'duel') {
+  if (phase === 'exploration' || phase === 'duel' || phase === 'duel2') {
     return (
       <div className="game-wrapper" style={{ padding: 0 }}>
         <HUD />
         <GameCanvas
-          mode={phase === 'duel' ? 'duel' : 'explore'}
+          mode={phase === 'exploration' ? 'explore' : phase}
           onExit={handleExploreExit}
           onTriggerEvent={handleTriggerEvent}
           onDuelEnd={handleDuelEnd}
